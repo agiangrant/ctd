@@ -1,0 +1,27 @@
+// Vertex shader for colored geometry (triangles, rectangles)
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) texcoord: vec2<f32>,  // For future texture support
+    @location(2) color: vec4<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) texcoord: vec2<f32>,
+}
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = vec4<f32>(input.position, 1.0);
+    output.color = input.color;
+    output.texcoord = input.texcoord;
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return input.color;
+}

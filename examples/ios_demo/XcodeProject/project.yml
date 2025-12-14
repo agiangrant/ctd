@@ -1,0 +1,58 @@
+name: CenteredDemoApp
+options:
+  bundleIdPrefix: com.centered.demo
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+
+targets:
+  CenteredDemoApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: CenteredDemo
+        type: group
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.centered.demo
+        INFOPLIST_FILE: CenteredDemo/Info.plist
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_ENTITLEMENTS: ""
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../"
+          - "$(PROJECT_DIR)/Frameworks"
+        LIBRARY_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/Frameworks"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/Frameworks"
+          - "@loader_path/Frameworks"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # Link the Rust static library and required system libs
+        OTHER_LDFLAGS:
+          - "-lcentered_engine"
+          - "-lc++"
+          - "-framework Metal"
+          - "-framework MetalKit"
+          - "-framework QuartzCore"
+          - "-framework CoreText"
+          - "-framework CoreGraphics"
+          - "-framework CoreFoundation"
+          - "-framework Foundation"
+          - "-framework UIKit"
+          - "-framework Security"
+    dependencies:
+      - framework: ../CenteredDemo.xcframework
+        embed: true
+    postBuildScripts:
+      - name: "Copy Rust Library"
+        script: |
+          mkdir -p "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Frameworks"
+          cp "${PROJECT_DIR}/Frameworks/libcentered_engine.dylib" "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Frameworks/"
+          # Sign the dylib
+          codesign --force --sign - "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Frameworks/libcentered_engine.dylib"
+        runOnlyWhenInstalling: false
+        basedOnDependencyAnalysis: false

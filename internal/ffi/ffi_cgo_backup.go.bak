@@ -1,0 +1,3023 @@
+//go:build !purego
+// +build !purego
+
+package ffi
+
+/*
+#cgo LDFLAGS: -L../../engine/target/release -lcentered_engine
+#cgo darwin LDFLAGS: -framework Metal -framework QuartzCore -framework AppKit -framework AVFoundation -framework CoreMedia
+
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+// Event types (must match Rust AppEventType enum)
+#define EVENT_READY 0
+#define EVENT_REDRAW_REQUESTED 1
+#define EVENT_RESIZED 2
+#define EVENT_CLOSE_REQUESTED 3
+#define EVENT_MOUSE_MOVED 4
+#define EVENT_MOUSE_PRESSED 5
+#define EVENT_MOUSE_RELEASED 6
+#define EVENT_KEY_PRESSED 7
+#define EVENT_KEY_RELEASED 8
+#define EVENT_CHAR_INPUT 9
+#define EVENT_MOUSE_WHEEL 10
+
+// Event data from Rust
+typedef struct {
+    uint8_t event_type;
+    double data1;
+    double data2;
+    double scale_factor;
+} AppEvent;
+
+// Frame response to Rust
+typedef struct {
+    char* immediate_commands;
+    char* widget_delta;
+    _Bool request_redraw;
+} FrameResponse;
+
+// App configuration
+typedef struct {
+    const char* title;
+    uint32_t width;
+    uint32_t height;
+    _Bool vsync;
+    _Bool low_power_gpu;
+    _Bool allow_software_fallback;
+    void* user_data;
+    // Window appearance options
+    _Bool decorations;
+    _Bool transparent;
+    _Bool resizable;
+    _Bool always_on_top;
+    uint32_t min_width;
+    uint32_t min_height;
+    uint32_t max_width;
+    uint32_t max_height;
+    int32_t x;
+    int32_t y;
+    // Frameless window styling options
+    float corner_radius;
+    _Bool show_native_controls;
+    _Bool enable_minimize;
+    _Bool enable_maximize;
+} AppConfig;
+
+// Callback type
+typedef void (*AppCallback)(const AppEvent* event, FrameResponse* response, void* user_data);
+
+// C wrapper function defined in callback.c - bridges to Go's goCallback
+extern void cgoCallbackWrapper(const AppEvent* event, FrameResponse* response, void* user_data);
+
+// Rust FFI functions
+extern int centered_app_run(const AppConfig* config, AppCallback callback);
+extern void centered_app_request_exit(void);
+extern int centered_app_request_redraw(void);
+extern const char* centered_engine_version(void);
+
+// Image/Texture management
+extern int centered_backend_load_image(const uint8_t* data_ptr, size_t data_len);
+extern int centered_backend_load_image_file(const char* path);
+extern int centered_backend_unload_image(uint32_t texture_id);
+extern int centered_backend_get_texture_size(uint32_t texture_id, uint32_t* width_out, uint32_t* height_out);
+
+// Text measurement result
+typedef struct {
+    float width;
+    float height;
+    float ascent;
+    float descent;
+} TextMeasurement;
+
+// Text measurement functions
+extern TextMeasurement centered_measure_text(const char* text, const char* font_name, float font_size);
+extern float centered_measure_text_width(const char* text, const char* font_name, float font_size);
+extern float centered_measure_text_to_cursor(const char* text, uint32_t char_index, const char* font_name, float font_size);
+extern float centered_measure_text_with_font(const char* text, const char* font_json);
+extern double centered_get_scale_factor(void);
+
+// Clipboard functions (defined in clipboard.c)
+extern const char* clipboard_get_string(void);
+extern void clipboard_set_string(const char* str);
+
+// File dialog functions (defined in filedialog.c)
+typedef struct {
+    char** paths;
+    int count;
+    int ok;
+} FileDialogResult;
+extern FileDialogResult* file_dialog_open(const char* title, const char* directory, const char* filters, int multiple);
+extern FileDialogResult* file_dialog_save(const char* title, const char* directory, const char* filters);
+extern void file_dialog_result_free(FileDialogResult* result);
+
+// Tray icon functions (defined in trayicon.c)
+extern int tray_icon_create(void);
+extern void tray_icon_destroy(void);
+extern int tray_icon_set_icon_file(const char* path);
+extern int tray_icon_set_icon_data(const void* data, size_t length);
+extern void tray_icon_set_tooltip(const char* tooltip);
+extern void tray_icon_set_title(const char* title);
+extern void tray_icon_clear_menu(void);
+extern int tray_icon_add_menu_item(const char* label, int enabled, int checked, int is_separator);
+extern void tray_icon_set_menu_item_enabled(int index, int enabled);
+extern void tray_icon_set_menu_item_checked(int index, int checked);
+extern void tray_icon_set_menu_item_label(int index, const char* label);
+extern void tray_icon_set_visible(int visible);
+extern int tray_icon_is_visible(void);
+
+// Tray icon callback - defined in Go, called from C
+void goTrayMenuCallback(int index);
+
+// System preferences
+extern int centered_system_dark_mode(void);
+
+// Audio playback
+extern uint32_t centered_audio_create(void);
+extern void centered_audio_destroy(uint32_t player_id);
+extern int centered_audio_load_url(uint32_t player_id, const char* url);
+extern int centered_audio_load_file(uint32_t player_id, const char* path);
+extern int centered_audio_play(uint32_t player_id);
+extern int centered_audio_pause(uint32_t player_id);
+extern int centered_audio_stop(uint32_t player_id);
+extern int centered_audio_seek(uint32_t player_id, uint64_t timestamp_ms);
+extern int centered_audio_set_looping(uint32_t player_id, _Bool looping);
+extern int centered_audio_set_volume(uint32_t player_id, float volume);
+extern int centered_audio_get_state(uint32_t player_id);
+extern uint64_t centered_audio_get_time(uint32_t player_id);
+extern int centered_audio_get_info(uint32_t player_id, uint64_t* duration_ms_out, uint32_t* sample_rate_out, uint32_t* channels_out);
+extern float centered_audio_get_volume(uint32_t player_id);
+extern int centered_audio_is_looping(uint32_t player_id);
+extern int centered_audio_update(uint32_t player_id);
+
+// Video playback
+extern uint32_t centered_video_create(void);
+extern void centered_video_destroy(uint32_t player_id);
+extern int centered_video_load_url(uint32_t player_id, const char* url);
+extern int centered_video_load_file(uint32_t player_id, const char* path);
+extern int centered_video_init_stream(uint32_t player_id, uint32_t width, uint32_t height);
+extern int centered_video_push_frame(uint32_t player_id, uint32_t width, uint32_t height, const uint8_t* data, size_t data_len, uint64_t timestamp_ms);
+extern int centered_video_play(uint32_t player_id);
+extern int centered_video_pause(uint32_t player_id);
+extern int centered_video_seek(uint32_t player_id, uint64_t timestamp_ms);
+extern int centered_video_set_looping(uint32_t player_id, _Bool looping);
+extern int centered_video_set_muted(uint32_t player_id, _Bool muted);
+extern int centered_video_set_volume(uint32_t player_id, float volume);
+extern int centered_video_get_state(uint32_t player_id);
+extern uint64_t centered_video_get_time(uint32_t player_id);
+extern int centered_video_get_info(uint32_t player_id, uint32_t* width_out, uint32_t* height_out, uint64_t* duration_ms_out);
+extern int centered_video_update(uint32_t player_id);
+extern uint32_t centered_video_get_texture_id(uint32_t player_id);
+
+// Audio input (microphone)
+extern uint32_t centered_audio_input_create(void);
+extern void centered_audio_input_destroy(uint32_t input_id);
+extern int centered_audio_input_request_permission(uint32_t input_id);
+extern int centered_audio_input_has_permission(uint32_t input_id);
+extern char* centered_audio_input_list_devices(uint32_t input_id);
+extern int centered_audio_input_open(uint32_t input_id, const char* device_id, uint32_t sample_rate, uint32_t channels);
+extern int centered_audio_input_start(uint32_t input_id);
+extern int centered_audio_input_stop(uint32_t input_id);
+extern void centered_audio_input_close(uint32_t input_id);
+extern int centered_audio_input_get_state(uint32_t input_id);
+extern float centered_audio_input_get_level(uint32_t input_id);
+
+// Video input (camera)
+extern uint32_t centered_video_input_create(void);
+extern void centered_video_input_destroy(uint32_t input_id);
+extern int centered_video_input_request_permission(uint32_t input_id);
+extern int centered_video_input_has_permission(uint32_t input_id);
+extern char* centered_video_input_list_devices(uint32_t input_id);
+extern int centered_video_input_open(uint32_t input_id, const char* device_id, uint32_t width, uint32_t height, uint32_t frame_rate);
+extern int centered_video_input_start(uint32_t input_id);
+extern int centered_video_input_stop(uint32_t input_id);
+extern void centered_video_input_close(uint32_t input_id);
+extern int centered_video_input_get_state(uint32_t input_id);
+extern int centered_video_input_get_dimensions(uint32_t input_id, uint32_t* width_out, uint32_t* height_out);
+extern int centered_video_input_get_frame_texture(uint32_t input_id, uint32_t existing_texture_id);
+
+// Free string returned from Rust
+extern void centered_free_string(char* s);
+*/
+import "C"
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"strings"
+	"sync"
+	"unsafe"
+)
+
+// EventType represents the type of event from the engine
+type EventType uint8
+
+const (
+	EventReady           EventType = 0
+	EventRedrawRequested EventType = 1
+	EventResized         EventType = 2
+	EventCloseRequested  EventType = 3
+	EventMouseMoved      EventType = 4
+	EventMousePressed    EventType = 5
+	EventMouseReleased   EventType = 6
+	EventKeyPressed      EventType = 7
+	EventKeyReleased     EventType = 8
+	EventCharInput       EventType = 9
+	EventMouseWheel      EventType = 10
+)
+
+// Modifier flags for keyboard events (stored in Data2)
+// These match the Rust constants in ffi.rs
+type Modifiers uint32
+
+const (
+	ModShift Modifiers = 1 << iota // Shift key
+	ModCtrl                        // Control key
+	ModAlt                         // Alt/Option key
+	ModSuper                       // Cmd (macOS) / Win (Windows) / Super (Linux)
+)
+
+// Common keycodes - stable cross-platform values that match the Rust engine
+// These values are consistent across all platforms (macOS, Windows, Linux)
+type Keycode uint32
+
+const (
+	// Letters A-Z = 0-25
+	KeyA Keycode = 0
+	KeyB Keycode = 1
+	KeyC Keycode = 2
+	KeyD Keycode = 3
+	KeyE Keycode = 4
+	KeyF Keycode = 5
+	KeyG Keycode = 6
+	KeyH Keycode = 7
+	KeyI Keycode = 8
+	KeyJ Keycode = 9
+	KeyK Keycode = 10
+	KeyL Keycode = 11
+	KeyM Keycode = 12
+	KeyN Keycode = 13
+	KeyO Keycode = 14
+	KeyP Keycode = 15
+	KeyQ Keycode = 16
+	KeyR Keycode = 17
+	KeyS Keycode = 18
+	KeyT Keycode = 19
+	KeyU Keycode = 20
+	KeyV Keycode = 21
+	KeyW Keycode = 22
+	KeyX Keycode = 23
+	KeyY Keycode = 24
+	KeyZ Keycode = 25
+
+	// Numbers 0-9 = 26-35
+	Key0 Keycode = 26
+	Key1 Keycode = 27
+	Key2 Keycode = 28
+	Key3 Keycode = 29
+	Key4 Keycode = 30
+	Key5 Keycode = 31
+	Key6 Keycode = 32
+	Key7 Keycode = 33
+	Key8 Keycode = 34
+	Key9 Keycode = 35
+
+	// Function keys F1-F12 = 36-47
+	KeyF1  Keycode = 36
+	KeyF2  Keycode = 37
+	KeyF3  Keycode = 38
+	KeyF4  Keycode = 39
+	KeyF5  Keycode = 40
+	KeyF6  Keycode = 41
+	KeyF7  Keycode = 42
+	KeyF8  Keycode = 43
+	KeyF9  Keycode = 44
+	KeyF10 Keycode = 45
+	KeyF11 Keycode = 46
+	KeyF12 Keycode = 47
+
+	// Navigation = 48-55
+	KeyUp       Keycode = 48
+	KeyDown     Keycode = 49
+	KeyLeft     Keycode = 50
+	KeyRight    Keycode = 51
+	KeyHome     Keycode = 52
+	KeyEnd      Keycode = 53
+	KeyPageUp   Keycode = 54
+	KeyPageDown Keycode = 55
+
+	// Editing = 56-62
+	KeyBackspace Keycode = 56
+	KeyDelete    Keycode = 57
+	KeyInsert    Keycode = 58
+	KeyEnter     Keycode = 59
+	KeyTab       Keycode = 60
+	KeyEscape    Keycode = 61
+	KeySpace     Keycode = 62
+
+	// Punctuation = 63-73
+	KeyMinus        Keycode = 63 // - _
+	KeyEqual        Keycode = 64 // = +
+	KeyLeftBracket  Keycode = 65 // [ {
+	KeyRightBracket Keycode = 66 // ] }
+	KeyBackslash    Keycode = 67 // \ |
+	KeySemicolon    Keycode = 68 // ; :
+	KeyQuote        Keycode = 69 // ' "
+	KeyBackquote    Keycode = 70 // ` ~
+	KeyComma        Keycode = 71 // , <
+	KeyPeriod       Keycode = 72 // . >
+	KeySlash        Keycode = 73 // / ?
+
+	// Numpad = 100-115
+	KeyNumpad0        Keycode = 100
+	KeyNumpad1        Keycode = 101
+	KeyNumpad2        Keycode = 102
+	KeyNumpad3        Keycode = 103
+	KeyNumpad4        Keycode = 104
+	KeyNumpad5        Keycode = 105
+	KeyNumpad6        Keycode = 106
+	KeyNumpad7        Keycode = 107
+	KeyNumpad8        Keycode = 108
+	KeyNumpad9        Keycode = 109
+	KeyNumpadAdd      Keycode = 110
+	KeyNumpadSubtract Keycode = 111
+	KeyNumpadMultiply Keycode = 112
+	KeyNumpadDivide   Keycode = 113
+	KeyNumpadDecimal  Keycode = 114
+	KeyNumpadEnter    Keycode = 115
+
+	// Modifier keys (when pressed as keys, not as modifiers)
+	KeyShiftLeft    Keycode = 200
+	KeyShiftRight   Keycode = 201
+	KeyControlLeft  Keycode = 202
+	KeyControlRight Keycode = 203
+	KeyAltLeft      Keycode = 204
+	KeyAltRight     Keycode = 205
+	KeySuperLeft    Keycode = 206 // Cmd on macOS, Win on Windows
+	KeySuperRight   Keycode = 207
+
+	// Other = 300+
+	KeyCapsLock    Keycode = 300
+	KeyNumLock     Keycode = 301
+	KeyScrollLock  Keycode = 302
+	KeyPrintScreen Keycode = 303
+	KeyPause       Keycode = 304
+	KeyContextMenu Keycode = 305
+
+	// Unknown/unmapped keys
+	KeyUnknown Keycode = 999
+)
+
+// Event represents an event from the Rust engine
+type Event struct {
+	Type        EventType
+	Data1       float64 // Width/X/Button/Keycode depending on type
+	Data2       float64 // Height/Y/Modifiers depending on type
+	ScaleFactor float64
+}
+
+// Keycode returns the keycode for KeyPressed/KeyReleased events
+// Returns the physical scancode as uint32
+func (e Event) Keycode() uint32 {
+	return uint32(e.Data1)
+}
+
+// Modifiers returns the modifier flags for KeyPressed/KeyReleased/CharInput events
+func (e Event) Modifiers() Modifiers {
+	return Modifiers(uint32(e.Data2))
+}
+
+// HasShift returns true if Shift was held during a keyboard event
+func (e Event) HasShift() bool {
+	return e.Modifiers()&ModShift != 0
+}
+
+// HasCtrl returns true if Ctrl was held during a keyboard event
+func (e Event) HasCtrl() bool {
+	return e.Modifiers()&ModCtrl != 0
+}
+
+// HasAlt returns true if Alt/Option was held during a keyboard event
+func (e Event) HasAlt() bool {
+	return e.Modifiers()&ModAlt != 0
+}
+
+// HasSuper returns true if Cmd/Win/Super was held during a keyboard event
+func (e Event) HasSuper() bool {
+	return e.Modifiers()&ModSuper != 0
+}
+
+// Char returns the character for CharInput events
+// Returns 0 if Data1 is not a valid Unicode codepoint
+func (e Event) Char() rune {
+	if e.Type != EventCharInput {
+		return 0
+	}
+	return rune(e.Data1)
+}
+
+// MouseX returns the X coordinate for mouse events
+func (e Event) MouseX() float64 {
+	return e.Data1
+}
+
+// MouseY returns the Y coordinate for mouse events
+func (e Event) MouseY() float64 {
+	return e.Data2
+}
+
+// MouseButton returns the button number for MousePressed/MouseReleased events
+// 0 = left, 1 = right, 2 = middle
+func (e Event) MouseButton() int {
+	return int(e.Data1)
+}
+
+// Width returns the width for Resized events
+func (e Event) Width() float64 {
+	return e.Data1
+}
+
+// Height returns the height for Resized events
+func (e Event) Height() float64 {
+	return e.Data2
+}
+
+// ScrollDelta returns the scroll delta for MouseWheel events (deltaX, deltaY)
+func (e Event) ScrollDelta() (float64, float64) {
+	return e.Data1, e.Data2
+}
+
+// FrameResponse is returned by the event handler
+type FrameResponse struct {
+	// ImmediateCommands are render commands for immediate mode rendering
+	ImmediateCommands []RenderCommand
+
+	// WidgetDelta contains updates to the retained mode widget tree
+	WidgetDelta interface{}
+
+	// RequestRedraw requests another frame immediately
+	RequestRedraw bool
+}
+
+// EventHandler is called for each event from the engine
+type EventHandler func(event Event) FrameResponse
+
+// AppConfig configures the application window
+type AppConfig struct {
+	Title                 string
+	Width                 uint32
+	Height                uint32
+	VSync                 bool
+	LowPowerGPU           bool          // Prefer integrated GPU over discrete (saves battery)
+	AllowSoftwareFallback bool          // Allow software rendering if no GPU available (false = fail loudly)
+	Transport             TransportMode // Transport mode for Go-Rust FFI communication
+
+	// Window appearance options
+	Decorations bool // Show window decorations (title bar, close button). false = frameless
+	Transparent bool // Transparent window background (for custom shapes, overlays)
+	Resizable   bool // Allow window to be resized
+	AlwaysOnTop bool // Keep window above all others
+
+	// Size constraints (0 = no constraint)
+	MinWidth  uint32
+	MinHeight uint32
+	MaxWidth  uint32
+	MaxHeight uint32
+
+	// Initial position (math.MinInt32 = system default/centered)
+	X int32
+	Y int32
+
+	// Frameless window styling options (only apply when Decorations = false)
+	CornerRadius       float32 // Corner radius in points (default 10.0 for macOS look)
+	ShowNativeControls bool    // Show native window controls (traffic lights on macOS)
+	EnableMinimize     bool    // Enable minimize button (requires ShowNativeControls)
+	EnableMaximize     bool    // Enable maximize/zoom button (requires ShowNativeControls)
+}
+
+// DefaultAppConfig returns sensible defaults
+func DefaultAppConfig() AppConfig {
+	return AppConfig{
+		Title:                 "Centered App",
+		Width:                 1024,
+		Height:                768,
+		VSync:                 true,
+		LowPowerGPU:           false,                 // Use high-performance GPU by default
+		AllowSoftwareFallback: false,                 // Fail loudly on devices without proper GPU
+		Transport:             TransportSharedMemory, // Use shared memory for production performance
+
+		// Window appearance defaults
+		Decorations: true,  // Standard window with title bar
+		Transparent: false, // Opaque background
+		Resizable:   true,  // Allow resizing
+		AlwaysOnTop: false, // Normal window stacking
+
+		// No size constraints by default
+		MinWidth:  0,
+		MinHeight: 0,
+		MaxWidth:  0,
+		MaxHeight: 0,
+
+		// System default position (centered)
+		X: -2147483648, // math.MinInt32 - signals system default
+		Y: -2147483648,
+
+		// Frameless window styling defaults
+		CornerRadius:       10.0,  // macOS default window corner radius
+		ShowNativeControls: true,  // Show traffic lights by default
+		EnableMinimize:     true,  // Enable minimize button
+		EnableMaximize:     true,  // Enable maximize button
+	}
+}
+
+// Global handler storage for callback
+var (
+	globalHandler EventHandler
+	globalMutex   sync.Mutex
+)
+
+// goCallback is the actual callback that gets called from C
+//
+//export goCallback
+func goCallback(event *C.AppEvent, response *C.FrameResponse, userData unsafe.Pointer) {
+	globalMutex.Lock()
+	handler := globalHandler
+	globalMutex.Unlock()
+
+	if handler == nil {
+		return
+	}
+
+	// Convert C event to Go event
+	goEvent := Event{
+		Type:        EventType(event.event_type),
+		Data1:       float64(event.data1),
+		Data2:       float64(event.data2),
+		ScaleFactor: float64(event.scale_factor),
+	}
+
+	// Call the Go handler
+	goResponse := handler(goEvent)
+
+	// Convert response back to C
+	response.request_redraw = C._Bool(goResponse.RequestRedraw)
+	response.immediate_commands = nil
+	response.widget_delta = nil
+
+	// Render immediate commands
+	if len(goResponse.ImmediateCommands) > 0 {
+		// Use binary rendering via shared memory if available (much faster)
+		transport := GetTransport()
+		if transport != nil && transport.Mode() == TransportSharedMemory {
+			// Binary render via shared memory - bypasses JSON serialization
+			_ = RenderFrameBinary(goResponse.ImmediateCommands)
+			// Commands already rendered, no need to pass through callback
+		} else {
+			// Fallback: serialize to JSON for FFI transport
+			jsonBytes, err := json.Marshal(goResponse.ImmediateCommands)
+			if err == nil {
+				response.immediate_commands = C.CString(string(jsonBytes))
+			}
+		}
+	}
+
+	// Serialize widget delta to JSON if present
+	if goResponse.WidgetDelta != nil {
+		jsonBytes, err := json.Marshal(goResponse.WidgetDelta)
+		if err == nil {
+			response.widget_delta = C.CString(string(jsonBytes))
+		}
+	}
+}
+
+// Run starts the application with the given configuration and event handler
+// This function blocks until the application exits
+func Run(config AppConfig, handler EventHandler) error {
+	// Initialize transport with configured mode
+	SetTransportMode(config.Transport)
+	if err := InitTransport(); err != nil {
+		return err
+	}
+	defer CloseTransport()
+
+	// Store handler globally (CGO callback limitation)
+	globalMutex.Lock()
+	globalHandler = handler
+	globalMutex.Unlock()
+
+	defer func() {
+		globalMutex.Lock()
+		globalHandler = nil
+		globalMutex.Unlock()
+	}()
+
+	// Convert config to C
+	var cTitle *C.char
+	if config.Title != "" {
+		cTitle = C.CString(config.Title)
+		defer C.free(unsafe.Pointer(cTitle))
+	}
+
+	cConfig := C.AppConfig{
+		title:                   cTitle,
+		width:                   C.uint32_t(config.Width),
+		height:                  C.uint32_t(config.Height),
+		vsync:                   C._Bool(config.VSync),
+		low_power_gpu:           C._Bool(config.LowPowerGPU),
+		allow_software_fallback: C._Bool(config.AllowSoftwareFallback),
+		user_data:               nil,
+		// Window appearance options
+		decorations:   C._Bool(config.Decorations),
+		transparent:   C._Bool(config.Transparent),
+		resizable:     C._Bool(config.Resizable),
+		always_on_top: C._Bool(config.AlwaysOnTop),
+		min_width:     C.uint32_t(config.MinWidth),
+		min_height:    C.uint32_t(config.MinHeight),
+		max_width:     C.uint32_t(config.MaxWidth),
+		max_height:    C.uint32_t(config.MaxHeight),
+		x:             C.int32_t(config.X),
+		y:             C.int32_t(config.Y),
+		// Frameless window styling options
+		corner_radius:        C.float(config.CornerRadius),
+		show_native_controls: C._Bool(config.ShowNativeControls),
+		enable_minimize:      C._Bool(config.EnableMinimize),
+		enable_maximize:      C._Bool(config.EnableMaximize),
+	}
+
+	// Run the app (blocks until exit)
+	// We pass the C wrapper function which calls back into Go
+	result := C.centered_app_run(&cConfig, C.AppCallback(C.cgoCallbackWrapper))
+	if result != 0 {
+		return &AppError{Code: int(result)}
+	}
+
+	return nil
+}
+
+// RequestExit requests the application to exit
+func RequestExit() {
+	C.centered_app_request_exit()
+}
+
+// RequestRedraw requests a redraw from any goroutine.
+// This is safe to call from background goroutines.
+// It wakes up the event loop and triggers a redraw on the next tick.
+func RequestRedraw() {
+	C.centered_app_request_redraw()
+}
+
+// Version returns the engine version string
+func Version() string {
+	return C.GoString(C.centered_engine_version())
+}
+
+// AppError represents an error from the engine
+type AppError struct {
+	Code int
+}
+
+func (e *AppError) Error() string {
+	switch e.Code {
+	case -1:
+		return "null config"
+	case -2:
+		return "failed to create event loop"
+	case -3:
+		return "event loop error"
+	default:
+		return "unknown error"
+	}
+}
+
+// ============================================================================
+// Render Commands
+// ============================================================================
+
+// RenderCommand represents a single rendering operation
+type RenderCommand struct {
+	DrawRect        *DrawRectCmd        `json:"DrawRect,omitempty"`
+	DrawText        *DrawTextCmd        `json:"DrawText,omitempty"`
+	DrawImage       *DrawImageCmd       `json:"DrawImage,omitempty"`
+	DrawShadow      *DrawShadowCmd      `json:"DrawShadow,omitempty"`
+	Clear           *ClearCmd           `json:"Clear,omitempty"`
+	PushClip        *PushClipCmd        `json:"PushClip,omitempty"`
+	PopClip         *struct{}           `json:"PopClip,omitempty"`
+	BeginScrollView *BeginScrollViewCmd `json:"BeginScrollView,omitempty"`
+	EndScrollView   *struct{}           `json:"EndScrollView,omitempty"`
+	SetOpacity      *float32            `json:"SetOpacity,omitempty"`
+}
+
+// BeginScrollViewCmd starts a scrollable region
+type BeginScrollViewCmd struct {
+	X             float32  `json:"x"`              // Viewport X position
+	Y             float32  `json:"y"`              // Viewport Y position
+	Width         float32  `json:"width"`          // Viewport width
+	Height        float32  `json:"height"`         // Viewport height
+	ScrollX       float32  `json:"scroll_x"`       // Horizontal scroll offset
+	ScrollY       float32  `json:"scroll_y"`       // Vertical scroll offset
+	ContentWidth  *float32 `json:"content_width"`  // Optional total content width
+	ContentHeight *float32 `json:"content_height"` // Optional total content height
+}
+
+type DrawRectCmd struct {
+	X           float32    `json:"x"`
+	Y           float32    `json:"y"`
+	Width       float32    `json:"width"`
+	Height      float32    `json:"height"`
+	Color       uint32     `json:"color"`
+	CornerRadii [4]float32 `json:"corner_radii"`
+	Rotation    float32    `json:"rotation,omitempty"` // Rotation in radians around center
+	Border      *Border    `json:"border,omitempty"`
+	Gradient    *Gradient  `json:"gradient,omitempty"`
+}
+
+// DrawImageCmd draws a texture at the specified position
+type DrawImageCmd struct {
+	X         float32 `json:"x"`
+	Y         float32 `json:"y"`
+	Width     float32 `json:"width"`
+	Height    float32 `json:"height"`
+	TextureID uint32  `json:"texture_id"`
+	// Optional source rect for sprite sheets (x, y, w, h in texture coords 0-1)
+	SourceRect *[4]float32 `json:"source_rect,omitempty"`
+	// Corner radii [top-left, top-right, bottom-right, bottom-left]
+	CornerRadii [4]float32 `json:"corner_radii,omitempty"`
+}
+
+type Border struct {
+	Width float32 `json:"width"`
+	Color uint32  `json:"color"`
+	Style string  `json:"style"`
+}
+
+type Gradient struct {
+	Linear *LinearGradient `json:"Linear,omitempty"`
+	Radial *RadialGradient `json:"Radial,omitempty"`
+}
+
+type LinearGradient struct {
+	Angle float32        `json:"angle"`
+	Stops []GradientStop `json:"stops"`
+}
+
+type RadialGradient struct {
+	CenterX float32        `json:"center_x"`
+	CenterY float32        `json:"center_y"`
+	Stops   []GradientStop `json:"stops"`
+}
+
+type GradientStop struct {
+	Position float32 `json:"position"`
+	Color    uint32  `json:"color"`
+}
+
+type DrawTextCmd struct {
+	X      float32          `json:"x"`
+	Y      float32          `json:"y"`
+	Text   string           `json:"text"`
+	Font   FontDescriptor   `json:"font"`
+	Color  uint32           `json:"color"`
+	Layout TextLayoutConfig `json:"layout"`
+}
+
+// FontDescriptor matches Rust's FontDescriptor with FontSource enum
+type FontDescriptor struct {
+	Source FontSource `json:"source"`
+	Weight uint16     `json:"weight"`
+	Style  FontStyle  `json:"style"`
+	Size   float32    `json:"size"`
+}
+
+// FontSource represents where to load the font from
+// Serializes as Rust enum: {"System": "name"} or {"Bundled": "path"}
+type FontSource struct {
+	System  *string `json:"System,omitempty"`
+	Bundled *string `json:"Bundled,omitempty"`
+}
+
+// FontStyle matches Rust's FontStyle enum
+type FontStyle string
+
+const (
+	FontStyleNormal FontStyle = "Normal"
+	FontStyleItalic FontStyle = "Italic"
+)
+
+// TextLayoutConfig matches Rust's TextLayoutConfig
+type TextLayoutConfig struct {
+	MaxWidth      *float32      `json:"max_width,omitempty"`
+	MaxHeight     *float32      `json:"max_height,omitempty"`
+	MaxLines      *int          `json:"max_lines,omitempty"`
+	LineHeight    float32       `json:"line_height"`
+	LetterSpacing float32       `json:"letter_spacing"`
+	WordSpacing   float32       `json:"word_spacing"`
+	Alignment     TextAlign     `json:"alignment"`
+	VerticalAlign VerticalAlign `json:"vertical_align"`
+	WordBreak     WordBreak     `json:"word_break"`
+	Overflow      TextOverflow  `json:"overflow"`
+	WhiteSpace    WhiteSpace    `json:"white_space"`
+}
+
+// TextAlign matches Rust's TextAlign enum
+type TextAlign string
+
+const (
+	TextAlignLeft    TextAlign = "Left"
+	TextAlignCenter  TextAlign = "Center"
+	TextAlignRight   TextAlign = "Right"
+	TextAlignJustify TextAlign = "Justify"
+)
+
+// VerticalAlign matches Rust's VerticalAlign enum
+type VerticalAlign string
+
+const (
+	VerticalAlignTop      VerticalAlign = "Top"
+	VerticalAlignMiddle   VerticalAlign = "Middle"
+	VerticalAlignBottom   VerticalAlign = "Bottom"
+	VerticalAlignBaseline VerticalAlign = "Baseline"
+)
+
+// WordBreak matches Rust's WordBreak enum
+type WordBreak string
+
+const (
+	WordBreakNormal    WordBreak = "Normal"
+	WordBreakBreakAll  WordBreak = "BreakAll"
+	WordBreakKeepAll   WordBreak = "KeepAll"
+	WordBreakBreakWord WordBreak = "BreakWord"
+)
+
+// TextOverflow matches Rust's TextOverflow enum
+type TextOverflow string
+
+const (
+	TextOverflowClip     TextOverflow = "Clip"
+	TextOverflowEllipsis TextOverflow = "Ellipsis"
+	TextOverflowWrap     TextOverflow = "Wrap"
+)
+
+// WhiteSpace matches Rust's WhiteSpace enum
+type WhiteSpace string
+
+const (
+	WhiteSpaceNormal  WhiteSpace = "Normal"
+	WhiteSpaceNoWrap  WhiteSpace = "NoWrap"
+	WhiteSpacePre     WhiteSpace = "Pre"
+	WhiteSpacePreWrap WhiteSpace = "PreWrap"
+)
+
+type DrawShadowCmd struct {
+	X           float32    `json:"x"`
+	Y           float32    `json:"y"`
+	Width       float32    `json:"width"`
+	Height      float32    `json:"height"`
+	Blur        float32    `json:"blur"`
+	Color       uint32     `json:"color"`
+	OffsetX     float32    `json:"offset_x"`
+	OffsetY     float32    `json:"offset_y"`
+	CornerRadii [4]float32 `json:"corner_radii"`
+}
+
+type ClearCmd struct {
+	R uint8 `json:"r"`
+	G uint8 `json:"g"`
+	B uint8 `json:"b"`
+	A uint8 `json:"a"`
+}
+
+type PushClipCmd struct {
+	X      float32 `json:"x"`
+	Y      float32 `json:"y"`
+	Width  float32 `json:"width"`
+	Height float32 `json:"height"`
+}
+
+// ============================================================================
+// Command Builders
+// ============================================================================
+
+func Rect(x, y, width, height float32, color uint32) RenderCommand {
+	return RenderCommand{
+		DrawRect: &DrawRectCmd{
+			X: x, Y: y, Width: width, Height: height,
+			Color:       color,
+			CornerRadii: [4]float32{0, 0, 0, 0},
+		},
+	}
+}
+
+func RoundedRect(x, y, width, height float32, color uint32, radius float32) RenderCommand {
+	return RenderCommand{
+		DrawRect: &DrawRectCmd{
+			X: x, Y: y, Width: width, Height: height,
+			Color:       color,
+			CornerRadii: [4]float32{radius, radius, radius, radius},
+		},
+	}
+}
+
+func Shadow(x, y, width, height, blur float32, color uint32, offsetX, offsetY float32, radii [4]float32) RenderCommand {
+	return RenderCommand{
+		DrawShadow: &DrawShadowCmd{
+			X: x, Y: y, Width: width, Height: height,
+			Blur: blur, Color: color,
+			OffsetX: offsetX, OffsetY: offsetY,
+			CornerRadii: radii,
+		},
+	}
+}
+
+func Clear(r, g, b, a uint8) RenderCommand {
+	return RenderCommand{
+		Clear: &ClearCmd{R: r, G: g, B: b, A: a},
+	}
+}
+
+// PushClip begins a clip region - all subsequent draws will be clipped to this rect
+func PushClip(x, y, width, height float32) RenderCommand {
+	return RenderCommand{
+		PushClip: &PushClipCmd{X: x, Y: y, Width: width, Height: height},
+	}
+}
+
+// PopClip ends the current clip region, restoring the previous clip (if nested) or no clip
+func PopClip() RenderCommand {
+	return RenderCommand{
+		PopClip: &struct{}{},
+	}
+}
+
+// BeginScrollView starts a scrollable region with clipping and content offset
+// All subsequent draw commands until EndScrollView will be offset by scrollX/scrollY
+// and clipped to the viewport bounds (x, y, width, height)
+func BeginScrollView(x, y, width, height, scrollX, scrollY float32) RenderCommand {
+	return RenderCommand{
+		BeginScrollView: &BeginScrollViewCmd{
+			X:       x,
+			Y:       y,
+			Width:   width,
+			Height:  height,
+			ScrollX: scrollX,
+			ScrollY: scrollY,
+		},
+	}
+}
+
+// BeginScrollViewWithContent starts a scrollable region with known content dimensions
+// The contentWidth and contentHeight can be used for scroll indicator calculations
+func BeginScrollViewWithContent(x, y, width, height, scrollX, scrollY, contentWidth, contentHeight float32) RenderCommand {
+	return RenderCommand{
+		BeginScrollView: &BeginScrollViewCmd{
+			X:             x,
+			Y:             y,
+			Width:         width,
+			Height:        height,
+			ScrollX:       scrollX,
+			ScrollY:       scrollY,
+			ContentWidth:  &contentWidth,
+			ContentHeight: &contentHeight,
+		},
+	}
+}
+
+// EndScrollView ends the current scroll view, restoring the previous state
+func EndScrollView() RenderCommand {
+	return RenderCommand{
+		EndScrollView: &struct{}{},
+	}
+}
+
+// Text creates a text render command with sensible defaults
+func Text(text string, x, y float32, size float32, color uint32) RenderCommand {
+	fontName := "system"
+	return RenderCommand{
+		DrawText: &DrawTextCmd{
+			X:     x,
+			Y:     y,
+			Text:  text,
+			Color: color,
+			Font: FontDescriptor{
+				Source: FontSource{System: &fontName},
+				Weight: 400,
+				Style:  FontStyleNormal,
+				Size:   size,
+			},
+			Layout: DefaultTextLayout(),
+		},
+	}
+}
+
+// TextWithFont creates a text render command with a specific font
+func TextWithFont(text string, x, y float32, font FontDescriptor, color uint32) RenderCommand {
+	return RenderCommand{
+		DrawText: &DrawTextCmd{
+			X:      x,
+			Y:      y,
+			Text:   text,
+			Color:  color,
+			Font:   font,
+			Layout: DefaultTextLayout(),
+		},
+	}
+}
+
+// TextWithLayout creates a text render command with custom layout
+func TextWithLayout(text string, x, y float32, font FontDescriptor, color uint32, layout TextLayoutConfig) RenderCommand {
+	return RenderCommand{
+		DrawText: &DrawTextCmd{
+			X:      x,
+			Y:      y,
+			Text:   text,
+			Color:  color,
+			Font:   font,
+			Layout: layout,
+		},
+	}
+}
+
+// SystemFont creates a FontDescriptor for a system font
+func SystemFont(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 400,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontBold creates a bold system font descriptor
+func SystemFontBold(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 700,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontItalic creates an italic system font descriptor
+func SystemFontItalic(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 400,
+		Style:  FontStyleItalic,
+		Size:   size,
+	}
+}
+
+// SystemFontBoldItalic creates a bold italic system font descriptor
+func SystemFontBoldItalic(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 700,
+		Style:  FontStyleItalic,
+		Size:   size,
+	}
+}
+
+// SystemFontWithWeight creates a system font with a specific weight
+// Weight should be 100-900 (100=thin, 400=regular, 700=bold, 900=black)
+func SystemFontWithWeight(name string, size float32, weight uint16) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: weight,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontLight creates a light (300) system font descriptor
+func SystemFontLight(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 300,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontMedium creates a medium (500) system font descriptor
+func SystemFontMedium(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 500,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontSemiBold creates a semi-bold (600) system font descriptor
+func SystemFontSemiBold(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 600,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontHeavy creates a heavy (800) system font descriptor
+func SystemFontHeavy(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 800,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// SystemFontBlack creates a black (900) system font descriptor
+func SystemFontBlack(name string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{System: &name},
+		Weight: 900,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// BundledFont creates a FontDescriptor for a bundled font file (TTF, OTF, etc.)
+func BundledFont(path string, size float32) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{Bundled: &path},
+		Weight: 400,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// BundledFontWithWeight creates a bundled font descriptor with a specific weight
+func BundledFontWithWeight(path string, size float32, weight uint16) FontDescriptor {
+	return FontDescriptor{
+		Source: FontSource{Bundled: &path},
+		Weight: weight,
+		Style:  FontStyleNormal,
+		Size:   size,
+	}
+}
+
+// DefaultTextLayout returns sensible text layout defaults matching Rust
+func DefaultTextLayout() TextLayoutConfig {
+	return TextLayoutConfig{
+		LineHeight:    1.5,
+		LetterSpacing: 0.0,
+		WordSpacing:   0.0,
+		Alignment:     TextAlignLeft,
+		VerticalAlign: VerticalAlignTop,
+		WordBreak:     WordBreakNormal,
+		Overflow:      TextOverflowWrap,
+		WhiteSpace:    WhiteSpaceNormal,
+	}
+}
+
+// CenteredTextLayout returns a layout for center-aligned text
+func CenteredTextLayout() TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.Alignment = TextAlignCenter
+	return layout
+}
+
+// WrappedTextLayout returns a layout with word wrapping at the specified width
+func WrappedTextLayout(maxWidth float32) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.MaxWidth = &maxWidth
+	return layout
+}
+
+// WrappedCenteredTextLayout returns a centered, wrapping layout
+func WrappedCenteredTextLayout(maxWidth float32) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.MaxWidth = &maxWidth
+	layout.Alignment = TextAlignCenter
+	return layout
+}
+
+// EllipsisTextLayout returns a layout that truncates with "..." when exceeding maxLines
+func EllipsisTextLayout(maxWidth float32, maxLines int) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.MaxWidth = &maxWidth
+	layout.MaxLines = &maxLines
+	layout.Overflow = TextOverflowEllipsis
+	return layout
+}
+
+// SingleLineEllipsisLayout returns a single-line layout that truncates with "..."
+func SingleLineEllipsisLayout(maxWidth float32) TextLayoutConfig {
+	maxLines := 1
+	layout := DefaultTextLayout()
+	layout.MaxWidth = &maxWidth
+	layout.MaxLines = &maxLines
+	layout.Overflow = TextOverflowEllipsis
+	return layout
+}
+
+// EllipsisHeightLayout returns a layout that truncates with "..." when exceeding maxHeight
+func EllipsisHeightLayout(maxWidth, maxHeight float32) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.MaxWidth = &maxWidth
+	layout.MaxHeight = &maxHeight
+	layout.Overflow = TextOverflowEllipsis
+	return layout
+}
+
+// ClippedTextLayout returns a layout that clips text at maxWidth/maxHeight
+func ClippedTextLayout(maxWidth, maxHeight float32) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.MaxWidth = &maxWidth
+	layout.MaxHeight = &maxHeight
+	layout.Overflow = TextOverflowClip
+	return layout
+}
+
+// SpacedTextLayout returns a layout with custom letter and word spacing
+// letterSpacing and wordSpacing are in em units (e.g., 0.05 = 5% of font size)
+func SpacedTextLayout(letterSpacing, wordSpacing float32) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.LetterSpacing = letterSpacing
+	layout.WordSpacing = wordSpacing
+	return layout
+}
+
+// TrackingLayout returns a layout with letter spacing (tracking)
+// Common values: -0.05 (tight), 0 (normal), 0.05 (wide), 0.1 (very wide)
+func TrackingLayout(letterSpacing float32) TextLayoutConfig {
+	layout := DefaultTextLayout()
+	layout.LetterSpacing = letterSpacing
+	return layout
+}
+
+// ============================================================================
+// Color Helpers
+// ============================================================================
+
+func RGBA(r, g, b, a uint8) uint32 {
+	return uint32(r)<<24 | uint32(g)<<16 | uint32(b)<<8 | uint32(a)
+}
+
+func RGB(r, g, b uint8) uint32 {
+	return RGBA(r, g, b, 255)
+}
+
+func HexColor(hex uint32) uint32 {
+	return (hex << 8) | 0xFF
+}
+
+// ============================================================================
+// Image/Texture Management
+// ============================================================================
+
+// TextureID represents a loaded texture in the GPU
+type TextureID uint32
+
+// LoadImage loads an image from raw bytes (PNG, JPEG, etc.) and returns a texture ID
+// The image data is decoded and uploaded to the GPU.
+// Returns an error if loading fails.
+func LoadImage(data []byte) (TextureID, error) {
+	if len(data) == 0 {
+		return 0, &ImageError{Code: -1, Message: "empty image data"}
+	}
+
+	result := C.centered_backend_load_image(
+		(*C.uint8_t)(unsafe.Pointer(&data[0])),
+		C.size_t(len(data)),
+	)
+
+	if result < 0 {
+		return 0, &ImageError{Code: int(result), Message: imageErrorMessage(int(result))}
+	}
+
+	return TextureID(result), nil
+}
+
+// LoadImageFile loads an image from a file path and returns a texture ID
+func LoadImageFile(path string) (TextureID, error) {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	result := C.centered_backend_load_image_file(cPath)
+
+	if result < 0 {
+		return 0, &ImageError{Code: int(result), Message: imageErrorMessage(int(result))}
+	}
+
+	return TextureID(result), nil
+}
+
+// UnloadImage frees GPU resources for a loaded texture
+func UnloadImage(id TextureID) error {
+	result := C.centered_backend_unload_image(C.uint32_t(id))
+	if result < 0 {
+		return &ImageError{Code: int(result), Message: imageErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// GetTextureSize returns the dimensions of a loaded texture
+// Returns (width, height, nil) on success, or (0, 0, error) on failure
+func GetTextureSize(id TextureID) (uint32, uint32, error) {
+	var width, height C.uint32_t
+	result := C.centered_backend_get_texture_size(C.uint32_t(id), &width, &height)
+	if result < 0 {
+		return 0, 0, &ImageError{Code: int(result), Message: imageErrorMessage(int(result))}
+	}
+	return uint32(width), uint32(height), nil
+}
+
+// ImageError represents an error from image operations
+type ImageError struct {
+	Code    int
+	Message string
+}
+
+func (e *ImageError) Error() string {
+	return e.Message
+}
+
+func imageErrorMessage(code int) string {
+	switch code {
+	case -1:
+		return "invalid parameters"
+	case -2:
+		return "backend not initialized"
+	case -3:
+		return "failed to decode image"
+	case -4:
+		return "failed to upload to GPU"
+	default:
+		return "unknown image error"
+	}
+}
+
+// ============================================================================
+// Video Playback API
+// ============================================================================
+
+// VideoPlayerID is a unique identifier for a video player
+type VideoPlayerID uint32
+
+// VideoState represents the current playback state
+type VideoState int32
+
+const (
+	VideoStateIdle    VideoState = 0
+	VideoStateLoading VideoState = 1
+	VideoStatePlaying VideoState = 2
+	VideoStatePaused  VideoState = 3
+	VideoStateEnded   VideoState = 4
+	VideoStateError   VideoState = 5
+)
+
+// String returns a human-readable state name
+func (s VideoState) String() string {
+	switch s {
+	case VideoStateIdle:
+		return "idle"
+	case VideoStateLoading:
+		return "loading"
+	case VideoStatePlaying:
+		return "playing"
+	case VideoStatePaused:
+		return "paused"
+	case VideoStateEnded:
+		return "ended"
+	case VideoStateError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+// VideoInfo contains metadata about a loaded video
+type VideoInfo struct {
+	Width      uint32
+	Height     uint32
+	DurationMs uint64
+}
+
+// VideoError represents an error from video operations
+type VideoError struct {
+	Code    int
+	Message string
+}
+
+func (e *VideoError) Error() string {
+	return e.Message
+}
+
+func videoErrorMessage(code int) string {
+	switch code {
+	case -1:
+		return "invalid parameters"
+	case -2:
+		return "player not found"
+	case -3:
+		return "video operation failed"
+	case -4:
+		return "failed to create texture"
+	case -5:
+		return "failed to update texture"
+	default:
+		return "unknown video error"
+	}
+}
+
+// VideoCreate creates a new video player
+func VideoCreate() VideoPlayerID {
+	return VideoPlayerID(C.centered_video_create())
+}
+
+// VideoDestroy destroys a video player and frees resources
+func VideoDestroy(id VideoPlayerID) {
+	C.centered_video_destroy(C.uint32_t(id))
+}
+
+// VideoLoadURL loads a video from a URL (http:// or file://)
+func VideoLoadURL(id VideoPlayerID, url string) error {
+	cURL := C.CString(url)
+	defer C.free(unsafe.Pointer(cURL))
+
+	result := C.centered_video_load_url(C.uint32_t(id), cURL)
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoLoadFile loads a video from a file path
+func VideoLoadFile(id VideoPlayerID, path string) error {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	result := C.centered_video_load_file(C.uint32_t(id), cPath)
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoInitStream initializes a player for raw frame input (video streams)
+func VideoInitStream(id VideoPlayerID, width, height uint32) error {
+	result := C.centered_video_init_stream(C.uint32_t(id), C.uint32_t(width), C.uint32_t(height))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoPushFrame pushes a raw RGBA frame for video streams
+func VideoPushFrame(id VideoPlayerID, width, height uint32, data []byte, timestampMs uint64) error {
+	if len(data) == 0 {
+		return &VideoError{Code: -1, Message: "empty frame data"}
+	}
+
+	result := C.centered_video_push_frame(
+		C.uint32_t(id),
+		C.uint32_t(width),
+		C.uint32_t(height),
+		(*C.uint8_t)(unsafe.Pointer(&data[0])),
+		C.size_t(len(data)),
+		C.uint64_t(timestampMs),
+	)
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoPlay starts or resumes video playback
+func VideoPlay(id VideoPlayerID) error {
+	result := C.centered_video_play(C.uint32_t(id))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoPause pauses video playback
+func VideoPause(id VideoPlayerID) error {
+	result := C.centered_video_pause(C.uint32_t(id))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoSeek seeks to a specific position
+func VideoSeek(id VideoPlayerID, timestampMs uint64) error {
+	result := C.centered_video_seek(C.uint32_t(id), C.uint64_t(timestampMs))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoSetLooping sets whether the video should loop
+func VideoSetLooping(id VideoPlayerID, looping bool) error {
+	result := C.centered_video_set_looping(C.uint32_t(id), C._Bool(looping))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoSetMuted sets whether the audio is muted
+func VideoSetMuted(id VideoPlayerID, muted bool) error {
+	result := C.centered_video_set_muted(C.uint32_t(id), C._Bool(muted))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoSetVolume sets the audio volume (0.0 - 1.0)
+func VideoSetVolume(id VideoPlayerID, volume float32) error {
+	result := C.centered_video_set_volume(C.uint32_t(id), C.float(volume))
+	if result < 0 {
+		return &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoGetState returns the current playback state
+func VideoGetState(id VideoPlayerID) VideoState {
+	result := C.centered_video_get_state(C.uint32_t(id))
+	if result < 0 {
+		return VideoStateError
+	}
+	return VideoState(result)
+}
+
+// VideoGetTime returns the current playback position in milliseconds
+func VideoGetTime(id VideoPlayerID) uint64 {
+	return uint64(C.centered_video_get_time(C.uint32_t(id)))
+}
+
+// VideoGetInfo returns video metadata
+func VideoGetInfo(id VideoPlayerID) (*VideoInfo, error) {
+	var width, height C.uint32_t
+	var durationMs C.uint64_t
+
+	result := C.centered_video_get_info(C.uint32_t(id), &width, &height, &durationMs)
+	if result < 0 {
+		return nil, &VideoError{Code: int(result), Message: videoErrorMessage(int(result))}
+	}
+
+	return &VideoInfo{
+		Width:      uint32(width),
+		Height:     uint32(height),
+		DurationMs: uint64(durationMs),
+	}, nil
+}
+
+// VideoUpdate updates the video player and returns the texture ID for the current frame
+// Should be called once per frame. Returns 0 if no frame is available yet.
+func VideoUpdate(id VideoPlayerID) TextureID {
+	result := C.centered_video_update(C.uint32_t(id))
+	if result <= 0 {
+		return 0
+	}
+	return TextureID(result)
+}
+
+// VideoGetTextureID returns the current texture ID without updating
+func VideoGetTextureID(id VideoPlayerID) TextureID {
+	return TextureID(C.centered_video_get_texture_id(C.uint32_t(id)))
+}
+
+// ============================================================================
+// Image Command Builders
+// ============================================================================
+
+// Image creates a render command to draw an image at the specified position and size
+func Image(textureID TextureID, x, y, width, height float32) RenderCommand {
+	return RenderCommand{
+		DrawImage: &DrawImageCmd{
+			X:         x,
+			Y:         y,
+			Width:     width,
+			Height:    height,
+			TextureID: uint32(textureID),
+		},
+	}
+}
+
+// ImageWithCornerRadii creates a render command to draw an image with rounded corners
+func ImageWithCornerRadii(textureID TextureID, x, y, width, height float32, cornerRadii [4]float32) RenderCommand {
+	return RenderCommand{
+		DrawImage: &DrawImageCmd{
+			X:           x,
+			Y:           y,
+			Width:       width,
+			Height:      height,
+			TextureID:   uint32(textureID),
+			CornerRadii: cornerRadii,
+		},
+	}
+}
+
+// ImageWithSourceRect creates a render command to draw a portion of an image (for sprite sheets)
+// sourceRect is [x, y, width, height] in texture coordinates (0-1 range)
+func ImageWithSourceRect(textureID TextureID, x, y, width, height float32, sourceRect [4]float32) RenderCommand {
+	return RenderCommand{
+		DrawImage: &DrawImageCmd{
+			X:          x,
+			Y:          y,
+			Width:      width,
+			Height:     height,
+			TextureID:  uint32(textureID),
+			SourceRect: &sourceRect,
+		},
+	}
+}
+
+// ImageWithSourceRectAndCornerRadii creates a render command to draw a portion of an image with rounded corners
+func ImageWithSourceRectAndCornerRadii(textureID TextureID, x, y, width, height float32, sourceRect [4]float32, cornerRadii [4]float32) RenderCommand {
+	return RenderCommand{
+		DrawImage: &DrawImageCmd{
+			X:           x,
+			Y:           y,
+			Width:       width,
+			Height:      height,
+			TextureID:   uint32(textureID),
+			SourceRect:  &sourceRect,
+			CornerRadii: cornerRadii,
+		},
+	}
+}
+
+// Sprite draws a sprite from a sprite sheet using grid-based coordinates
+// spriteX, spriteY are the sprite position in the grid (0-indexed)
+// cols, rows are the number of columns and rows in the sprite sheet
+func Sprite(textureID TextureID, x, y, width, height float32, spriteX, spriteY, cols, rows int) RenderCommand {
+	// Calculate texture coordinates
+	spriteWidth := 1.0 / float32(cols)
+	spriteHeight := 1.0 / float32(rows)
+	srcX := float32(spriteX) * spriteWidth
+	srcY := float32(spriteY) * spriteHeight
+
+	return RenderCommand{
+		DrawImage: &DrawImageCmd{
+			X:          x,
+			Y:          y,
+			Width:      width,
+			Height:     height,
+			TextureID:  uint32(textureID),
+			SourceRect: &[4]float32{srcX, srcY, spriteWidth, spriteHeight},
+		},
+	}
+}
+
+// ============================================================================
+// Text Measurement
+// ============================================================================
+
+// TextMeasurement contains the dimensions of measured text
+type TextMeasurement struct {
+	// Width is the total width of the text in pixels
+	Width float32
+	// Height is the total height based on font metrics (ascent + descent)
+	Height float32
+	// Ascent is the distance from the baseline to the top of the tallest glyph
+	Ascent float32
+	// Descent is the distance from the baseline to the bottom (positive value)
+	Descent float32
+}
+
+// MeasureText measures text dimensions using a specific font
+// Returns width, height, ascent, and descent in pixels
+// fontName should be a system font name like "Helvetica", "San Francisco", etc.
+func MeasureText(text string, fontName string, fontSize float32) TextMeasurement {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	cFontName := C.CString(fontName)
+	defer C.free(unsafe.Pointer(cFontName))
+
+	result := C.centered_measure_text(cText, cFontName, C.float(fontSize))
+
+	return TextMeasurement{
+		Width:   float32(result.width),
+		Height:  float32(result.height),
+		Ascent:  float32(result.ascent),
+		Descent: float32(result.descent),
+	}
+}
+
+// MeasureTextWidth returns just the width of text in pixels
+// This is more efficient if you only need the width
+func MeasureTextWidth(text string, fontName string, fontSize float32) float32 {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	cFontName := C.CString(fontName)
+	defer C.free(unsafe.Pointer(cFontName))
+
+	return float32(C.centered_measure_text_width(cText, cFontName, C.float(fontSize)))
+}
+
+// TextMeasurementRequest represents a single text measurement request for batch operations
+type TextMeasurementRequest struct {
+	Text     string
+	FontName string
+	FontSize float32
+}
+
+// MeasureTextWidthBatch measures multiple text strings in a single FFI call.
+// This is significantly more efficient than calling MeasureTextWidth in a loop
+// when measuring many text widgets during layout.
+// Returns a slice of widths corresponding to each input measurement.
+func MeasureTextWidthBatch(measurements []TextMeasurementRequest) []float32 {
+	if len(measurements) == 0 {
+		return nil
+	}
+
+	// Calculate payload size: count(4) + [text_len(4) + text + font_len(4) + font + size(4)]...
+	payloadSize := 4
+	for _, m := range measurements {
+		payloadSize += 4 + len(m.Text) + 4 + len(m.FontName) + 4
+	}
+
+	// Build payload
+	payload := make([]byte, payloadSize)
+	offset := 0
+
+	// Write count
+	PutUint32(payload[offset:], uint32(len(measurements)))
+	offset += 4
+
+	// Write each measurement
+	for _, m := range measurements {
+		// Text length + text
+		PutUint32(payload[offset:], uint32(len(m.Text)))
+		offset += 4
+		copy(payload[offset:], m.Text)
+		offset += len(m.Text)
+
+		// Font name length + font name
+		PutUint32(payload[offset:], uint32(len(m.FontName)))
+		offset += 4
+		copy(payload[offset:], m.FontName)
+		offset += len(m.FontName)
+
+		// Font size (as f32 bits)
+		PutFloat32(payload[offset:], m.FontSize)
+		offset += 4
+	}
+
+	// Execute via transport
+	transport := GetTransport()
+	respType, respPayload, err := transport.Execute(CmdMeasureTextBatch, payload)
+	if err != nil || respType != RespFloat32Array {
+		// Fallback: return zeros
+		return make([]float32, len(measurements))
+	}
+
+	// Parse response: count(4) + [width(4)]...
+	if len(respPayload) < 4 {
+		return make([]float32, len(measurements))
+	}
+
+	count := int(GetUint32(respPayload[0:4]))
+	if count != len(measurements) || len(respPayload) < 4+count*4 {
+		return make([]float32, len(measurements))
+	}
+
+	widths := make([]float32, count)
+	for i := 0; i < count; i++ {
+		widths[i] = GetFloat32(respPayload[4+i*4:])
+	}
+	return widths
+}
+
+// MeasureTextToCursor measures the width of text from the start up to (but not including)
+// the character at charIndex. Useful for positioning a cursor in a text field.
+// charIndex is the 0-based index counting Unicode characters (not bytes)
+func MeasureTextToCursor(text string, charIndex int, fontName string, fontSize float32) float32 {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	cFontName := C.CString(fontName)
+	defer C.free(unsafe.Pointer(cFontName))
+
+	return float32(C.centered_measure_text_to_cursor(cText, C.uint32_t(charIndex), cFontName, C.float(fontSize)))
+}
+
+// MeasureTextWithFont measures text width using a full FontDescriptor.
+// This supports both system fonts and bundled fonts.
+// Returns the width in logical pixels (not physical/HiDPI pixels).
+func MeasureTextWithFont(text string, font FontDescriptor) float32 {
+	if text == "" {
+		return 0
+	}
+
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	// Serialize FontDescriptor to JSON
+	fontJSON, err := json.Marshal(font)
+	if err != nil {
+		return 0
+	}
+
+	cFontJSON := C.CString(string(fontJSON))
+	defer C.free(unsafe.Pointer(cFontJSON))
+
+	return float32(C.centered_measure_text_with_font(cText, cFontJSON))
+}
+
+// GetScaleFactor returns the current display scale factor (for HiDPI displays)
+// On Retina displays this is typically 2.0, on standard displays it's 1.0
+// Returns 1.0 if the backend is not yet initialized
+func GetScaleFactor() float64 {
+	return float64(C.centered_get_scale_factor())
+}
+
+// ============================================================================
+// Clipboard Functions (macOS)
+// ============================================================================
+
+// ClipboardGetString returns the current text content of the system clipboard.
+// Returns an empty string if the clipboard is empty or doesn't contain text.
+func ClipboardGetString() string {
+	cStr := C.clipboard_get_string()
+	if cStr == nil {
+		return ""
+	}
+	return C.GoString(cStr)
+}
+
+// ClipboardSetString copies the given text to the system clipboard.
+func ClipboardSetString(text string) {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+	C.clipboard_set_string(cText)
+}
+
+// ============================================================================
+// File Dialog Functions
+// ============================================================================
+
+// FileFilter represents a file type filter for file dialogs.
+type FileFilter struct {
+	Name       string   // Display name (e.g., "Images")
+	Extensions []string // File extensions without dots (e.g., []string{"png", "jpg"})
+}
+
+// OpenFileDialog opens a file selection dialog and returns the selected file paths.
+// title: dialog title (can be empty for default)
+// directory: initial directory (can be empty for default)
+// filters: file type filters (can be nil for all files)
+// multiple: whether to allow multiple file selection
+// Returns (paths, ok) where ok is true if user selected files, false if cancelled.
+func OpenFileDialog(title, directory string, filters []FileFilter, multiple bool) ([]string, bool) {
+	var cTitle, cDirectory, cFilters *C.char
+
+	if title != "" {
+		cTitle = C.CString(title)
+		defer C.free(unsafe.Pointer(cTitle))
+	}
+
+	if directory != "" {
+		cDirectory = C.CString(directory)
+		defer C.free(unsafe.Pointer(cDirectory))
+	}
+
+	// Build comma-separated filter string
+	if len(filters) > 0 {
+		var exts []string
+		for _, f := range filters {
+			exts = append(exts, f.Extensions...)
+		}
+		if len(exts) > 0 {
+			filterStr := strings.Join(exts, ",")
+			cFilters = C.CString(filterStr)
+			defer C.free(unsafe.Pointer(cFilters))
+		}
+	}
+
+	multipleInt := 0
+	if multiple {
+		multipleInt = 1
+	}
+
+	result := C.file_dialog_open(cTitle, cDirectory, cFilters, C.int(multipleInt))
+	if result == nil {
+		return nil, false
+	}
+	defer C.file_dialog_result_free(result)
+
+	if result.ok == 0 {
+		return nil, false
+	}
+
+	// Convert paths to Go strings
+	paths := make([]string, 0, result.count)
+	for i := 0; i < int(result.count); i++ {
+		// Get pointer to the i-th element
+		pathPtr := (**C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(result.paths)) + uintptr(i)*unsafe.Sizeof(result.paths)))
+		if *pathPtr != nil {
+			paths = append(paths, C.GoString(*pathPtr))
+		}
+	}
+
+	return paths, true
+}
+
+// SaveFileDialog opens a save file dialog and returns the selected file path.
+// title: dialog title (can be empty for default)
+// directory: initial directory (can be empty for default)
+// filters: file type filters (can be nil for all files)
+// Returns (path, ok) where ok is true if user selected a location, false if cancelled.
+func SaveFileDialog(title, directory string, filters []FileFilter) (string, bool) {
+	var cTitle, cDirectory, cFilters *C.char
+
+	if title != "" {
+		cTitle = C.CString(title)
+		defer C.free(unsafe.Pointer(cTitle))
+	}
+
+	if directory != "" {
+		cDirectory = C.CString(directory)
+		defer C.free(unsafe.Pointer(cDirectory))
+	}
+
+	// Build comma-separated filter string
+	if len(filters) > 0 {
+		var exts []string
+		for _, f := range filters {
+			exts = append(exts, f.Extensions...)
+		}
+		if len(exts) > 0 {
+			filterStr := strings.Join(exts, ",")
+			cFilters = C.CString(filterStr)
+			defer C.free(unsafe.Pointer(cFilters))
+		}
+	}
+
+	result := C.file_dialog_save(cTitle, cDirectory, cFilters)
+	if result == nil {
+		return "", false
+	}
+	defer C.file_dialog_result_free(result)
+
+	if result.ok == 0 || result.count == 0 {
+		return "", false
+	}
+
+	// Get the first (and only) path
+	pathPtr := (**C.char)(unsafe.Pointer(result.paths))
+	if *pathPtr == nil {
+		return "", false
+	}
+
+	return C.GoString(*pathPtr), true
+}
+
+// ============================================================================
+// Tray Icon Functions
+// ============================================================================
+
+// TrayMenuCallback is called when a menu item is clicked
+var trayMenuCallback func(index int)
+
+//export goTrayMenuCallback
+func goTrayMenuCallback(index C.int) {
+	if trayMenuCallback != nil {
+		trayMenuCallback(int(index))
+	}
+}
+
+// TrayIconCreate creates the system tray icon.
+// Returns nil on success, error on failure.
+func TrayIconCreate() error {
+	result := C.tray_icon_create()
+	if result < 0 {
+		return fmt.Errorf("failed to create tray icon: %d", result)
+	}
+	return nil
+}
+
+// TrayIconDestroy removes the tray icon from the system tray.
+func TrayIconDestroy() {
+	C.tray_icon_destroy()
+}
+
+// TrayIconSetIconFile sets the tray icon from a file path.
+// The image should be a PNG or JPEG, ideally 18x18 or 36x36 for retina.
+func TrayIconSetIconFile(path string) error {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	result := C.tray_icon_set_icon_file(cPath)
+	if result < 0 {
+		return fmt.Errorf("failed to set tray icon: %d", result)
+	}
+	return nil
+}
+
+// TrayIconSetIconData sets the tray icon from raw image data (PNG/JPEG bytes).
+func TrayIconSetIconData(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("empty image data")
+	}
+
+	result := C.tray_icon_set_icon_data(unsafe.Pointer(&data[0]), C.size_t(len(data)))
+	if result < 0 {
+		return fmt.Errorf("failed to set tray icon: %d", result)
+	}
+	return nil
+}
+
+// TrayIconSetTooltip sets the tooltip shown when hovering over the tray icon.
+func TrayIconSetTooltip(tooltip string) {
+	cTooltip := C.CString(tooltip)
+	defer C.free(unsafe.Pointer(cTooltip))
+	C.tray_icon_set_tooltip(cTooltip)
+}
+
+// TrayIconSetTitle sets the title text shown in the menu bar (alternative to icon).
+func TrayIconSetTitle(title string) {
+	cTitle := C.CString(title)
+	defer C.free(unsafe.Pointer(cTitle))
+	C.tray_icon_set_title(cTitle)
+}
+
+// TrayIconClearMenu removes all items from the tray menu.
+func TrayIconClearMenu() {
+	C.tray_icon_clear_menu()
+}
+
+// TrayIconAddMenuItem adds a menu item and returns its index.
+func TrayIconAddMenuItem(label string, enabled, checked bool) int {
+	cLabel := C.CString(label)
+	defer C.free(unsafe.Pointer(cLabel))
+
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	checkedInt := 0
+	if checked {
+		checkedInt = 1
+	}
+
+	return int(C.tray_icon_add_menu_item(cLabel, C.int(enabledInt), C.int(checkedInt), 0))
+}
+
+// TrayIconAddSeparator adds a separator line to the menu.
+func TrayIconAddSeparator() int {
+	return int(C.tray_icon_add_menu_item(nil, 0, 0, 1))
+}
+
+// TrayIconSetMenuItemEnabled enables or disables a menu item by index.
+func TrayIconSetMenuItemEnabled(index int, enabled bool) {
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	C.tray_icon_set_menu_item_enabled(C.int(index), C.int(enabledInt))
+}
+
+// TrayIconSetMenuItemChecked sets the checked state of a menu item.
+func TrayIconSetMenuItemChecked(index int, checked bool) {
+	checkedInt := 0
+	if checked {
+		checkedInt = 1
+	}
+	C.tray_icon_set_menu_item_checked(C.int(index), C.int(checkedInt))
+}
+
+// TrayIconSetMenuItemLabel changes the label of a menu item.
+func TrayIconSetMenuItemLabel(index int, label string) {
+	cLabel := C.CString(label)
+	defer C.free(unsafe.Pointer(cLabel))
+	C.tray_icon_set_menu_item_label(C.int(index), cLabel)
+}
+
+// TrayIconSetVisible shows or hides the tray icon.
+func TrayIconSetVisible(visible bool) {
+	visibleInt := 0
+	if visible {
+		visibleInt = 1
+	}
+	C.tray_icon_set_visible(C.int(visibleInt))
+}
+
+// TrayIconIsVisible returns whether the tray icon is currently visible.
+func TrayIconIsVisible() bool {
+	return C.tray_icon_is_visible() != 0
+}
+
+// TrayIconSetMenuCallback sets the callback for menu item clicks.
+func TrayIconSetMenuCallback(callback func(index int)) {
+	trayMenuCallback = callback
+}
+
+// ============================================================================
+// System Preferences
+// ============================================================================
+
+// SystemDarkMode returns whether the OS is currently in dark mode.
+// Returns true if dark mode is enabled, false if light mode or unable to determine.
+func SystemDarkMode() bool {
+	result := C.centered_system_dark_mode()
+	return result == 1
+}
+
+// ============================================================================
+// Audio Playback API
+// ============================================================================
+
+// AudioPlayerID is a unique identifier for an audio player
+type AudioPlayerID uint32
+
+// AudioState represents the current playback state
+type AudioState int32
+
+const (
+	AudioStateIdle    AudioState = 0
+	AudioStateLoading AudioState = 1
+	AudioStatePlaying AudioState = 2
+	AudioStatePaused  AudioState = 3
+	AudioStateEnded   AudioState = 4
+	AudioStateError   AudioState = 5
+)
+
+// String returns a human-readable state name
+func (s AudioState) String() string {
+	switch s {
+	case AudioStateIdle:
+		return "idle"
+	case AudioStateLoading:
+		return "loading"
+	case AudioStatePlaying:
+		return "playing"
+	case AudioStatePaused:
+		return "paused"
+	case AudioStateEnded:
+		return "ended"
+	case AudioStateError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+// AudioInfo contains metadata about loaded audio
+type AudioInfo struct {
+	DurationMs uint64 // Duration in milliseconds
+	SampleRate uint32 // Sample rate in Hz (e.g., 44100, 48000)
+	Channels   uint32 // Number of channels (1 = mono, 2 = stereo)
+}
+
+// AudioError represents an error from audio operations
+type AudioError struct {
+	Code    int
+	Message string
+}
+
+func (e *AudioError) Error() string {
+	return e.Message
+}
+
+func audioErrorMessage(code int) string {
+	switch code {
+	case -1:
+		return "invalid parameters"
+	case -2:
+		return "player not found"
+	case -3:
+		return "audio operation failed"
+	default:
+		return "unknown audio error"
+	}
+}
+
+// AudioCreate creates a new audio player
+// The player uses the system default output device and respects system volume preferences
+func AudioCreate() AudioPlayerID {
+	return AudioPlayerID(C.centered_audio_create())
+}
+
+// AudioDestroy destroys an audio player and frees resources
+func AudioDestroy(id AudioPlayerID) {
+	C.centered_audio_destroy(C.uint32_t(id))
+}
+
+// AudioLoadURL loads audio from a URL (http:// or file://)
+// Supports common audio formats: MP3, AAC, WAV, M4A, etc.
+func AudioLoadURL(id AudioPlayerID, url string) error {
+	cURL := C.CString(url)
+	defer C.free(unsafe.Pointer(cURL))
+
+	result := C.centered_audio_load_url(C.uint32_t(id), cURL)
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioLoadFile loads audio from a file path
+// Supports common audio formats: MP3, AAC, WAV, M4A, etc.
+func AudioLoadFile(id AudioPlayerID, path string) error {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	result := C.centered_audio_load_file(C.uint32_t(id), cPath)
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioPlay starts or resumes audio playback
+func AudioPlay(id AudioPlayerID) error {
+	result := C.centered_audio_play(C.uint32_t(id))
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioPause pauses audio playback
+func AudioPause(id AudioPlayerID) error {
+	result := C.centered_audio_pause(C.uint32_t(id))
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioStop stops audio playback and resets to the beginning
+func AudioStop(id AudioPlayerID) error {
+	result := C.centered_audio_stop(C.uint32_t(id))
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioSeek seeks to a specific position in milliseconds
+func AudioSeek(id AudioPlayerID, timestampMs uint64) error {
+	result := C.centered_audio_seek(C.uint32_t(id), C.uint64_t(timestampMs))
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioSetLooping sets whether the audio should loop
+func AudioSetLooping(id AudioPlayerID, looping bool) error {
+	result := C.centered_audio_set_looping(C.uint32_t(id), C._Bool(looping))
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioSetVolume sets the audio volume (0.0 - 1.0)
+// The volume is combined with system volume settings
+func AudioSetVolume(id AudioPlayerID, volume float32) error {
+	result := C.centered_audio_set_volume(C.uint32_t(id), C.float(volume))
+	if result < 0 {
+		return &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioGetState returns the current playback state
+func AudioGetState(id AudioPlayerID) AudioState {
+	result := C.centered_audio_get_state(C.uint32_t(id))
+	if result < 0 {
+		return AudioStateError
+	}
+	return AudioState(result)
+}
+
+// AudioGetTime returns the current playback position in milliseconds
+func AudioGetTime(id AudioPlayerID) uint64 {
+	return uint64(C.centered_audio_get_time(C.uint32_t(id)))
+}
+
+// AudioGetInfo returns audio metadata
+func AudioGetInfo(id AudioPlayerID) (*AudioInfo, error) {
+	var durationMs C.uint64_t
+	var sampleRate, channels C.uint32_t
+
+	result := C.centered_audio_get_info(C.uint32_t(id), &durationMs, &sampleRate, &channels)
+	if result < 0 {
+		return nil, &AudioError{Code: int(result), Message: audioErrorMessage(int(result))}
+	}
+
+	return &AudioInfo{
+		DurationMs: uint64(durationMs),
+		SampleRate: uint32(sampleRate),
+		Channels:   uint32(channels),
+	}, nil
+}
+
+// AudioGetVolume returns the current volume (0.0 - 1.0)
+func AudioGetVolume(id AudioPlayerID) float32 {
+	return float32(C.centered_audio_get_volume(C.uint32_t(id)))
+}
+
+// AudioIsLooping returns whether the audio is set to loop
+func AudioIsLooping(id AudioPlayerID) bool {
+	result := C.centered_audio_is_looping(C.uint32_t(id))
+	return result == 1
+}
+
+// AudioUpdate updates the audio player state
+// Should be called periodically (e.g., each frame) to detect state changes
+// Returns true if the state changed
+func AudioUpdate(id AudioPlayerID) bool {
+	result := C.centered_audio_update(C.uint32_t(id))
+	return result == 1
+}
+
+// ============================================================================
+// Audio Input (Microphone)
+// ============================================================================
+
+// AudioInputID is a unique identifier for an audio input device
+type AudioInputID uint32
+
+// AudioInputState represents the state of an audio input device
+type AudioInputState int32
+
+const (
+	AudioInputStateIdle                 AudioInputState = 0
+	AudioInputStateRequestingPermission AudioInputState = 1
+	AudioInputStateReady                AudioInputState = 2
+	AudioInputStateCapturing            AudioInputState = 3
+	AudioInputStateStopped              AudioInputState = 4
+	AudioInputStateError                AudioInputState = 5
+)
+
+// AudioInputDevice represents an available audio input device
+type AudioInputDevice struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// AudioInputError represents an audio input error
+type AudioInputError struct {
+	Code    int
+	Message string
+}
+
+func (e *AudioInputError) Error() string {
+	return e.Message
+}
+
+func audioInputErrorMessage(code int) string {
+	switch code {
+	case -1:
+		return "invalid parameter"
+	case -2:
+		return "input not found"
+	case -3:
+		return "input operation failed"
+	default:
+		return "unknown audio input error"
+	}
+}
+
+// AudioInputCreate creates a new audio input for microphone capture
+func AudioInputCreate() AudioInputID {
+	return AudioInputID(C.centered_audio_input_create())
+}
+
+// AudioInputDestroy destroys an audio input and frees resources
+func AudioInputDestroy(id AudioInputID) {
+	C.centered_audio_input_destroy(C.uint32_t(id))
+}
+
+// AudioInputRequestPermission requests microphone permission from the user
+// Returns nil if permission is already granted, or an error if permission is needed/denied
+func AudioInputRequestPermission(id AudioInputID) error {
+	result := C.centered_audio_input_request_permission(C.uint32_t(id))
+	if result != 0 {
+		if result == 1 {
+			return &AudioInputError{Code: 1, Message: "microphone permission required"}
+		}
+		return &AudioInputError{Code: int(result), Message: audioInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioInputHasPermission checks if microphone permission has been granted
+func AudioInputHasPermission(id AudioInputID) bool {
+	result := C.centered_audio_input_has_permission(C.uint32_t(id))
+	return result == 1
+}
+
+// AudioInputListDevices returns a list of available audio input devices
+func AudioInputListDevices(id AudioInputID) ([]AudioInputDevice, error) {
+	cDevices := C.centered_audio_input_list_devices(C.uint32_t(id))
+	if cDevices == nil {
+		return nil, &AudioInputError{Code: -1, Message: "failed to list devices"}
+	}
+	defer C.centered_free_string(cDevices)
+
+	jsonStr := C.GoString(cDevices)
+	var devices []AudioInputDevice
+	if err := json.Unmarshal([]byte(jsonStr), &devices); err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
+// AudioInputOpen opens an audio input device for capture
+// deviceID: device ID from AudioInputListDevices (empty string for default device)
+// sampleRate: sample rate in Hz (0 for default 44100)
+// channels: number of channels (0 for default 1 = mono)
+func AudioInputOpen(id AudioInputID, deviceID string, sampleRate, channels uint32) error {
+	var cDeviceID *C.char
+	if deviceID != "" {
+		cDeviceID = C.CString(deviceID)
+		defer C.free(unsafe.Pointer(cDeviceID))
+	}
+
+	result := C.centered_audio_input_open(C.uint32_t(id), cDeviceID, C.uint32_t(sampleRate), C.uint32_t(channels))
+	if result < 0 {
+		return &AudioInputError{Code: int(result), Message: audioInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioInputStart starts capturing audio from the input device
+func AudioInputStart(id AudioInputID) error {
+	result := C.centered_audio_input_start(C.uint32_t(id))
+	if result < 0 {
+		return &AudioInputError{Code: int(result), Message: audioInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioInputStop stops capturing audio
+func AudioInputStop(id AudioInputID) error {
+	result := C.centered_audio_input_stop(C.uint32_t(id))
+	if result < 0 {
+		return &AudioInputError{Code: int(result), Message: audioInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// AudioInputClose closes the audio input device
+func AudioInputClose(id AudioInputID) {
+	C.centered_audio_input_close(C.uint32_t(id))
+}
+
+// AudioInputGetState returns the current state of the audio input
+func AudioInputGetState(id AudioInputID) AudioInputState {
+	result := C.centered_audio_input_get_state(C.uint32_t(id))
+	if result < 0 {
+		return AudioInputStateError
+	}
+	return AudioInputState(result)
+}
+
+// AudioInputGetLevel returns the current audio input level (0.0 - 1.0 RMS)
+func AudioInputGetLevel(id AudioInputID) float32 {
+	return float32(C.centered_audio_input_get_level(C.uint32_t(id)))
+}
+
+// ============================================================================
+// Video Input (Camera)
+// ============================================================================
+
+// VideoInputID is a unique identifier for a video input device
+type VideoInputID uint32
+
+// VideoInputState represents the state of a video input device
+type VideoInputState int32
+
+const (
+	VideoInputStateIdle                 VideoInputState = 0
+	VideoInputStateRequestingPermission VideoInputState = 1
+	VideoInputStateReady                VideoInputState = 2
+	VideoInputStateCapturing            VideoInputState = 3
+	VideoInputStateStopped              VideoInputState = 4
+	VideoInputStateError                VideoInputState = 5
+)
+
+// CameraPosition represents the physical position of a camera
+type CameraPosition int32
+
+const (
+	CameraPositionUnspecified CameraPosition = 0
+	CameraPositionBack        CameraPosition = 1
+	CameraPositionFront       CameraPosition = 2
+	CameraPositionExternal    CameraPosition = 3
+)
+
+// VideoInputDevice represents an available video input device (camera)
+type VideoInputDevice struct {
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Position    int32       `json:"position"` // CameraPosition
+	IsDefault   bool        `json:"is_default"`
+	Resolutions [][2]uint32 `json:"resolutions"` // [(width, height), ...]
+}
+
+// VideoInputError represents a video input error
+type VideoInputError struct {
+	Code    int
+	Message string
+}
+
+func (e *VideoInputError) Error() string {
+	return e.Message
+}
+
+func videoInputErrorMessage(code int) string {
+	switch code {
+	case -1:
+		return "invalid parameter"
+	case -2:
+		return "input not found"
+	case -3:
+		return "input operation failed"
+	default:
+		return "unknown video input error"
+	}
+}
+
+// VideoInputCreate creates a new video input for camera capture
+func VideoInputCreate() VideoInputID {
+	return VideoInputID(C.centered_video_input_create())
+}
+
+// VideoInputDestroy destroys a video input and frees resources
+func VideoInputDestroy(id VideoInputID) {
+	C.centered_video_input_destroy(C.uint32_t(id))
+}
+
+// VideoInputRequestPermission requests camera permission from the user
+// Returns nil if permission is already granted, or an error if permission is needed/denied
+func VideoInputRequestPermission(id VideoInputID) error {
+	result := C.centered_video_input_request_permission(C.uint32_t(id))
+	if result != 0 {
+		if result == 1 {
+			return &VideoInputError{Code: 1, Message: "camera permission required"}
+		}
+		return &VideoInputError{Code: int(result), Message: videoInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoInputHasPermission checks if camera permission has been granted
+func VideoInputHasPermission(id VideoInputID) bool {
+	result := C.centered_video_input_has_permission(C.uint32_t(id))
+	return result == 1
+}
+
+// VideoInputListDevices returns a list of available video input devices (cameras)
+func VideoInputListDevices(id VideoInputID) ([]VideoInputDevice, error) {
+	cDevices := C.centered_video_input_list_devices(C.uint32_t(id))
+	if cDevices == nil {
+		return nil, &VideoInputError{Code: -1, Message: "failed to list devices"}
+	}
+	defer C.centered_free_string(cDevices)
+
+	jsonStr := C.GoString(cDevices)
+	var devices []VideoInputDevice
+	if err := json.Unmarshal([]byte(jsonStr), &devices); err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
+// VideoInputOpen opens a video input device (camera) for capture
+// deviceID: device ID from VideoInputListDevices (empty string for default device)
+// width: preferred width in pixels (0 for default 1280)
+// height: preferred height in pixels (0 for default 720)
+// frameRate: preferred frame rate (0 for default 30)
+func VideoInputOpen(id VideoInputID, deviceID string, width, height, frameRate uint32) error {
+	var cDeviceID *C.char
+	if deviceID != "" {
+		cDeviceID = C.CString(deviceID)
+		defer C.free(unsafe.Pointer(cDeviceID))
+	}
+
+	result := C.centered_video_input_open(C.uint32_t(id), cDeviceID, C.uint32_t(width), C.uint32_t(height), C.uint32_t(frameRate))
+	if result < 0 {
+		return &VideoInputError{Code: int(result), Message: videoInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoInputStart starts capturing video from the input device
+func VideoInputStart(id VideoInputID) error {
+	result := C.centered_video_input_start(C.uint32_t(id))
+	if result < 0 {
+		return &VideoInputError{Code: int(result), Message: videoInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoInputStop stops capturing video
+func VideoInputStop(id VideoInputID) error {
+	result := C.centered_video_input_stop(C.uint32_t(id))
+	if result < 0 {
+		return &VideoInputError{Code: int(result), Message: videoInputErrorMessage(int(result))}
+	}
+	return nil
+}
+
+// VideoInputClose closes the video input device
+func VideoInputClose(id VideoInputID) {
+	C.centered_video_input_close(C.uint32_t(id))
+}
+
+// VideoInputGetState returns the current state of the video input
+func VideoInputGetState(id VideoInputID) VideoInputState {
+	result := C.centered_video_input_get_state(C.uint32_t(id))
+	if result < 0 {
+		return VideoInputStateError
+	}
+	return VideoInputState(result)
+}
+
+// VideoInputGetDimensions returns the current video input dimensions (width, height)
+func VideoInputGetDimensions(id VideoInputID) (uint32, uint32, error) {
+	var width, height C.uint32_t
+	result := C.centered_video_input_get_dimensions(C.uint32_t(id), &width, &height)
+	if result < 0 {
+		return 0, 0, &VideoInputError{Code: int(result), Message: videoInputErrorMessage(int(result))}
+	}
+	return uint32(width), uint32(height), nil
+}
+
+// VideoInputGetFrameTexture gets the latest video frame and uploads it to a GPU texture.
+// Returns the texture ID on success, or an error.
+// If existingTextureID is non-zero, it will be unloaded before uploading the new frame.
+func VideoInputGetFrameTexture(id VideoInputID, existingTextureID uint32) (uint32, error) {
+	result := C.centered_video_input_get_frame_texture(C.uint32_t(id), C.uint32_t(existingTextureID))
+	if result < 0 {
+		switch result {
+		case -1:
+			return 0, &VideoInputError{Code: -1, Message: "backend not initialized"}
+		case -2:
+			return 0, &VideoInputError{Code: -2, Message: "video input not found"}
+		case -3:
+			return 0, &VideoInputError{Code: -3, Message: "no frame available"}
+		case -4:
+			return 0, &VideoInputError{Code: -4, Message: "texture upload failed"}
+		default:
+			return 0, &VideoInputError{Code: int(result), Message: "unknown error"}
+		}
+	}
+	return uint32(result), nil
+}
+
+// ============================================================================
+// Binary Render Command Serialization
+// ============================================================================
+
+// SerializeRenderCommands converts a slice of RenderCommands to binary format
+// for efficient transfer via shared memory transport.
+//
+// Binary format:
+//
+//	command_count(4) + [command_type(1) + command_data]...
+//
+// Command types:
+//
+//	0x00 - Clear: r(1) + g(1) + b(1) + a(1)
+//	0x01 - DrawRect: x(4) + y(4) + w(4) + h(4) + color(4) + radii(16) + rotation(4) + flags(1) + [border] + [gradient]
+//	0x02 - DrawText: x(4) + y(4) + text_len(4) + text + font_data + color(4) + layout_data
+//	0x03 - DrawImage: x(4) + y(4) + w(4) + h(4) + texture_id(4) + flags(1) + [source_rect(16)] + radii(16)
+//	0x04 - DrawShadow: x(4) + y(4) + w(4) + h(4) + blur(4) + color(4) + offset_x(4) + offset_y(4) + radii(16)
+//	0x05 - PushClip: x(4) + y(4) + w(4) + h(4)
+//	0x06 - PopClip: (no data)
+//	0x07 - BeginScrollView: x(4) + y(4) + w(4) + h(4) + scroll_x(4) + scroll_y(4) + flags(1) + [content_w(4)] + [content_h(4)]
+//	0x08 - EndScrollView: (no data)
+//	0x09 - SetOpacity: opacity(4)
+func SerializeRenderCommands(commands []RenderCommand) []byte {
+	// Estimate buffer size (will grow if needed)
+	buf := make([]byte, 0, len(commands)*64+4)
+
+	// Write command count
+	buf = appendU32(buf, uint32(len(commands)))
+
+	for _, cmd := range commands {
+		if cmd.Clear != nil {
+			buf = append(buf, 0x00) // command type
+			buf = append(buf, cmd.Clear.R, cmd.Clear.G, cmd.Clear.B, cmd.Clear.A)
+		} else if cmd.DrawRect != nil {
+			buf = append(buf, 0x01) // command type
+			buf = appendF32(buf, cmd.DrawRect.X)
+			buf = appendF32(buf, cmd.DrawRect.Y)
+			buf = appendF32(buf, cmd.DrawRect.Width)
+			buf = appendF32(buf, cmd.DrawRect.Height)
+			buf = appendU32(buf, cmd.DrawRect.Color)
+			buf = appendF32(buf, cmd.DrawRect.CornerRadii[0])
+			buf = appendF32(buf, cmd.DrawRect.CornerRadii[1])
+			buf = appendF32(buf, cmd.DrawRect.CornerRadii[2])
+			buf = appendF32(buf, cmd.DrawRect.CornerRadii[3])
+			buf = appendF32(buf, cmd.DrawRect.Rotation)
+
+			// Flags: bit 0 = has_border, bit 1 = has_gradient
+			var flags byte
+			if cmd.DrawRect.Border != nil {
+				flags |= 0x01
+			}
+			if cmd.DrawRect.Gradient != nil {
+				flags |= 0x02
+			}
+			buf = append(buf, flags)
+
+			// Optional border
+			if cmd.DrawRect.Border != nil {
+				buf = appendF32(buf, cmd.DrawRect.Border.Width)
+				buf = appendU32(buf, cmd.DrawRect.Border.Color)
+				var style byte
+				switch cmd.DrawRect.Border.Style {
+				case "Dashed":
+					style = 1
+				case "Dotted":
+					style = 2
+				default:
+					style = 0 // Solid
+				}
+				buf = append(buf, style)
+			}
+
+			// Optional gradient
+			if cmd.DrawRect.Gradient != nil {
+				if cmd.DrawRect.Gradient.Linear != nil {
+					buf = append(buf, 0) // linear gradient type
+					buf = appendF32(buf, cmd.DrawRect.Gradient.Linear.Angle)
+					buf = append(buf, byte(len(cmd.DrawRect.Gradient.Linear.Stops)))
+					for _, stop := range cmd.DrawRect.Gradient.Linear.Stops {
+						buf = appendF32(buf, stop.Position)
+						buf = appendU32(buf, stop.Color)
+					}
+				} else if cmd.DrawRect.Gradient.Radial != nil {
+					buf = append(buf, 1) // radial gradient type
+					buf = appendF32(buf, cmd.DrawRect.Gradient.Radial.CenterX)
+					buf = appendF32(buf, cmd.DrawRect.Gradient.Radial.CenterY)
+					buf = append(buf, byte(len(cmd.DrawRect.Gradient.Radial.Stops)))
+					for _, stop := range cmd.DrawRect.Gradient.Radial.Stops {
+						buf = appendF32(buf, stop.Position)
+						buf = appendU32(buf, stop.Color)
+					}
+				}
+			}
+		} else if cmd.DrawText != nil {
+			buf = append(buf, 0x02) // command type
+			buf = appendF32(buf, cmd.DrawText.X)
+			buf = appendF32(buf, cmd.DrawText.Y)
+			buf = appendString(buf, cmd.DrawText.Text)
+
+			// Font descriptor: source_type(1) + name_len(4) + name + weight(2) + style(1) + size(4)
+			var sourceType byte
+			var fontName string
+			if cmd.DrawText.Font.Source.Bundled != nil {
+				sourceType = 1
+				fontName = *cmd.DrawText.Font.Source.Bundled
+			} else if cmd.DrawText.Font.Source.System != nil {
+				sourceType = 0
+				fontName = *cmd.DrawText.Font.Source.System
+			} else {
+				sourceType = 0
+				fontName = "system"
+			}
+			buf = append(buf, sourceType)
+			buf = appendString(buf, fontName)
+			buf = appendU16(buf, cmd.DrawText.Font.Weight)
+			var style byte
+			if cmd.DrawText.Font.Style == FontStyleItalic {
+				style = 1
+			}
+			buf = append(buf, style)
+			buf = appendF32(buf, cmd.DrawText.Font.Size)
+
+			// Color
+			buf = appendU32(buf, cmd.DrawText.Color)
+
+			// Layout config
+			var layoutFlags byte
+			if cmd.DrawText.Layout.MaxWidth != nil {
+				layoutFlags |= 0x01
+			}
+			if cmd.DrawText.Layout.MaxHeight != nil {
+				layoutFlags |= 0x02
+			}
+			if cmd.DrawText.Layout.MaxLines != nil {
+				layoutFlags |= 0x04
+			}
+			buf = append(buf, layoutFlags)
+
+			if cmd.DrawText.Layout.MaxWidth != nil {
+				buf = appendF32(buf, *cmd.DrawText.Layout.MaxWidth)
+			}
+			if cmd.DrawText.Layout.MaxHeight != nil {
+				buf = appendF32(buf, *cmd.DrawText.Layout.MaxHeight)
+			}
+			if cmd.DrawText.Layout.MaxLines != nil {
+				buf = appendU32(buf, uint32(*cmd.DrawText.Layout.MaxLines))
+			}
+
+			buf = appendF32(buf, cmd.DrawText.Layout.LineHeight)
+			buf = appendF32(buf, cmd.DrawText.Layout.LetterSpacing)
+			buf = appendF32(buf, cmd.DrawText.Layout.WordSpacing)
+
+			var alignment byte
+			switch cmd.DrawText.Layout.Alignment {
+			case TextAlignCenter:
+				alignment = 1
+			case TextAlignRight:
+				alignment = 2
+			case TextAlignJustify:
+				alignment = 3
+			default:
+				alignment = 0 // Left
+			}
+			buf = append(buf, alignment)
+
+			var vertAlign byte
+			switch cmd.DrawText.Layout.VerticalAlign {
+			case VerticalAlignMiddle:
+				vertAlign = 1
+			case VerticalAlignBottom:
+				vertAlign = 2
+			case VerticalAlignBaseline:
+				vertAlign = 3
+			default:
+				vertAlign = 0 // Top
+			}
+			buf = append(buf, vertAlign)
+
+			var wordBreak byte
+			switch cmd.DrawText.Layout.WordBreak {
+			case WordBreakBreakAll:
+				wordBreak = 1
+			case WordBreakKeepAll:
+				wordBreak = 2
+			case WordBreakBreakWord:
+				wordBreak = 3
+			default:
+				wordBreak = 0 // Normal
+			}
+			buf = append(buf, wordBreak)
+
+			var overflow byte
+			switch cmd.DrawText.Layout.Overflow {
+			case TextOverflowEllipsis:
+				overflow = 1
+			case TextOverflowWrap:
+				overflow = 2
+			default:
+				overflow = 0 // Clip
+			}
+			buf = append(buf, overflow)
+
+			var whiteSpace byte
+			switch cmd.DrawText.Layout.WhiteSpace {
+			case WhiteSpaceNoWrap:
+				whiteSpace = 1
+			case WhiteSpacePre:
+				whiteSpace = 2
+			case WhiteSpacePreWrap:
+				whiteSpace = 3
+			default:
+				whiteSpace = 0 // Normal
+			}
+			buf = append(buf, whiteSpace)
+		} else if cmd.DrawImage != nil {
+			buf = append(buf, 0x03) // command type
+			buf = appendF32(buf, cmd.DrawImage.X)
+			buf = appendF32(buf, cmd.DrawImage.Y)
+			buf = appendF32(buf, cmd.DrawImage.Width)
+			buf = appendF32(buf, cmd.DrawImage.Height)
+			buf = appendU32(buf, cmd.DrawImage.TextureID)
+
+			var flags byte
+			if cmd.DrawImage.SourceRect != nil {
+				flags |= 0x01
+			}
+			buf = append(buf, flags)
+
+			if cmd.DrawImage.SourceRect != nil {
+				buf = appendF32(buf, cmd.DrawImage.SourceRect[0])
+				buf = appendF32(buf, cmd.DrawImage.SourceRect[1])
+				buf = appendF32(buf, cmd.DrawImage.SourceRect[2])
+				buf = appendF32(buf, cmd.DrawImage.SourceRect[3])
+			}
+
+			buf = appendF32(buf, cmd.DrawImage.CornerRadii[0])
+			buf = appendF32(buf, cmd.DrawImage.CornerRadii[1])
+			buf = appendF32(buf, cmd.DrawImage.CornerRadii[2])
+			buf = appendF32(buf, cmd.DrawImage.CornerRadii[3])
+		} else if cmd.DrawShadow != nil {
+			buf = append(buf, 0x04) // command type
+			buf = appendF32(buf, cmd.DrawShadow.X)
+			buf = appendF32(buf, cmd.DrawShadow.Y)
+			buf = appendF32(buf, cmd.DrawShadow.Width)
+			buf = appendF32(buf, cmd.DrawShadow.Height)
+			buf = appendF32(buf, cmd.DrawShadow.Blur)
+			buf = appendU32(buf, cmd.DrawShadow.Color)
+			buf = appendF32(buf, cmd.DrawShadow.OffsetX)
+			buf = appendF32(buf, cmd.DrawShadow.OffsetY)
+			buf = appendF32(buf, cmd.DrawShadow.CornerRadii[0])
+			buf = appendF32(buf, cmd.DrawShadow.CornerRadii[1])
+			buf = appendF32(buf, cmd.DrawShadow.CornerRadii[2])
+			buf = appendF32(buf, cmd.DrawShadow.CornerRadii[3])
+		} else if cmd.PushClip != nil {
+			buf = append(buf, 0x05) // command type
+			buf = appendF32(buf, cmd.PushClip.X)
+			buf = appendF32(buf, cmd.PushClip.Y)
+			buf = appendF32(buf, cmd.PushClip.Width)
+			buf = appendF32(buf, cmd.PushClip.Height)
+		} else if cmd.PopClip != nil {
+			buf = append(buf, 0x06) // command type
+		} else if cmd.BeginScrollView != nil {
+			buf = append(buf, 0x07) // command type
+			buf = appendF32(buf, cmd.BeginScrollView.X)
+			buf = appendF32(buf, cmd.BeginScrollView.Y)
+			buf = appendF32(buf, cmd.BeginScrollView.Width)
+			buf = appendF32(buf, cmd.BeginScrollView.Height)
+			buf = appendF32(buf, cmd.BeginScrollView.ScrollX)
+			buf = appendF32(buf, cmd.BeginScrollView.ScrollY)
+
+			var flags byte
+			if cmd.BeginScrollView.ContentWidth != nil {
+				flags |= 0x01
+			}
+			if cmd.BeginScrollView.ContentHeight != nil {
+				flags |= 0x02
+			}
+			buf = append(buf, flags)
+
+			if cmd.BeginScrollView.ContentWidth != nil {
+				buf = appendF32(buf, *cmd.BeginScrollView.ContentWidth)
+			}
+			if cmd.BeginScrollView.ContentHeight != nil {
+				buf = appendF32(buf, *cmd.BeginScrollView.ContentHeight)
+			}
+		} else if cmd.EndScrollView != nil {
+			buf = append(buf, 0x08) // command type
+		} else if cmd.SetOpacity != nil {
+			buf = append(buf, 0x09) // command type
+			buf = appendF32(buf, *cmd.SetOpacity)
+		}
+	}
+
+	return buf
+}
+
+// RenderFrameBinary submits render commands via binary format through shared memory transport
+func RenderFrameBinary(commands []RenderCommand) error {
+	if len(commands) == 0 {
+		return nil
+	}
+
+	payload := SerializeRenderCommands(commands)
+	transport := GetTransport()
+	respType, respPayload, err := transport.Execute(CmdRenderFrame, payload)
+	if err != nil {
+		return err
+	}
+	if respType == RespError {
+		if len(respPayload) > 0 {
+			return fmt.Errorf("render error: %s", string(respPayload))
+		}
+		return fmt.Errorf("render error")
+	}
+	return nil
+}
+
+// Helper functions for binary serialization
+
+func appendU16(buf []byte, v uint16) []byte {
+	return append(buf,
+		byte(v),
+		byte(v>>8),
+	)
+}
+
+func appendU32(buf []byte, v uint32) []byte {
+	return append(buf,
+		byte(v),
+		byte(v>>8),
+		byte(v>>16),
+		byte(v>>24),
+	)
+}
+
+func appendF32(buf []byte, v float32) []byte {
+	bits := math.Float32bits(v)
+	return appendU32(buf, bits)
+}
+
+func appendString(buf []byte, s string) []byte {
+	buf = appendU32(buf, uint32(len(s)))
+	return append(buf, s...)
+}

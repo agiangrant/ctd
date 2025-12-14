@@ -1,0 +1,142 @@
+version: '3'
+
+vars:
+  ENGINE_DIR: ./engine
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build the Rust engine
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo build
+
+  build:release:
+    desc: Build the Rust engine in release mode
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo build --release
+
+  test:
+    desc: Run Rust tests
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo test
+
+  test:watch:
+    desc: Run Rust tests in watch mode
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo watch -x test
+
+  check:
+    desc: Check Rust code without building
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo check
+
+  clippy:
+    desc: Run Clippy linter
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo clippy -- -D warnings
+
+  fmt:
+    desc: Format Rust code
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo fmt
+
+  fmt:check:
+    desc: Check Rust code formatting
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo fmt -- --check
+
+  clean:
+    desc: Clean build artifacts
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo clean
+
+  doc:
+    desc: Generate and open Rust documentation
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo doc --open
+
+  ci:
+    desc: Run all CI checks (fmt, clippy, test, build)
+    cmds:
+      - task: fmt:check
+      - task: clippy
+      - task: test
+      - task: build
+
+  dev:
+    desc: Development mode - watch and rebuild on changes
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - cargo watch -x check -x test -x build
+
+  generate:
+    desc: Generate Tailwind class map from theme.toml
+    cmds:
+      - go run tools/generate/main.go
+
+  generate:watch:
+    desc: Watch theme.toml and regenerate on changes
+    cmds:
+      - watchexec -w theme.toml -- task generate
+
+  # iOS tasks
+  ios:build:
+    desc: Build Rust engine for iOS device (aarch64-apple-ios)
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - rustup target add aarch64-apple-ios 2>/dev/null || true
+      - cargo build --release --lib --target aarch64-apple-ios
+
+  ios:build:sim:
+    desc: Build Rust engine for iOS simulator (aarch64-apple-ios-sim)
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - rustup target add aarch64-apple-ios-sim 2>/dev/null || true
+      - cargo build --release --lib --target aarch64-apple-ios-sim
+
+  ios:build:all:
+    desc: Build Rust engine for both iOS device and simulator
+    cmds:
+      - task: ios:build
+      - task: ios:build:sim
+
+  ios:run:
+    desc: Build, deploy and run iOS demo on simulator
+    vars:
+      XCODE_PROJECT: examples/ios_demo/XcodeProject/CenteredDemoApp.xcodeproj
+      BUNDLE_ID: com.centered.demo
+      DERIVED_DATA: '{{.HOME}}/Library/Developer/Xcode/DerivedData'
+    cmds:
+      - task: ios:build:sim
+      # Find the DerivedData folder for CenteredDemoApp
+      - |
+        APP_DIR=$(find {{.DERIVED_DATA}} -name "CenteredDemoApp-*" -type d 2>/dev/null | head -1)
+        if [ -z "$APP_DIR" ]; then
+          echo "Building Xcode project first..."
+          xcodebuild -project {{.XCODE_PROJECT}} -scheme CenteredDemoApp -sdk iphonesimulator -configuration Debug build
+          APP_DIR=$(find {{.DERIVED_DATA}} -name "CenteredDemoApp-*" -type d 2>/dev/null | head -1)
+        fi
+        APP_BUNDLE="$APP_DIR/Build/Products/Debug-iphonesimulator/CenteredDemoApp.app"
+        echo "Copying dylib to app bundle..."
+        mkdir -p "$APP_BUNDLE/Frameworks"
+        cp {{.ENGINE_DIR}}/target/aarch64-apple-ios-sim/release/libcentered_engine.dylib "$APP_BUNDLE/Frameworks/"
+        echo "Installing on simulator..."
+        open -a Simulator
+        sleep 2
+        xcrun simctl install booted "$APP_BUNDLE"
+        echo "Launching app..."
+        xcrun simctl launch --console booted {{.BUNDLE_ID}}

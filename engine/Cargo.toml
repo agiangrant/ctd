@@ -1,0 +1,66 @@
+[package]
+name = "centered-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "centered_engine"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+# iOS app binary - thin wrapper that calls into Go
+[[bin]]
+name = "centered-ios"
+path = "src/bin/ios_app.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Geometry and layout
+euclid = "0.22"
+
+# Collections
+slotmap = { version = "1.0", features = ["serde"] }
+
+# FFI
+libc = "0.2"
+lazy_static = "1.4"
+
+# Cross-platform rendering with wgpu
+wgpu = "22.1"
+pollster = "0.3"  # For blocking on async operations
+bytemuck = { version = "1.14", features = ["derive"] }
+raw-window-handle = "0.6"  # For cross-platform window handle access
+
+# Image loading (PNG, JPEG, etc.)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Windowing (for Rust-owned window mode)
+# Using vendored winit with iOS patches
+winit = { path = "vendor/winit" }
+
+# macOS/iOS - Core Graphics and Core Text for font rasterization
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+cocoa = "0.25"
+core-graphics = "0.23"
+core-foundation = "0.9"
+core-text = "20.1"
+objc = "0.2"
+block = "0.1"  # For Objective-C blocks (permission requests)
+
+[features]
+default = []
+
+[dev-dependencies]
+criterion = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# Patch winit's dependencies with vendored versions for iOS support
+[patch.crates-io]
+softbuffer = { path = "vendor/softbuffer" }

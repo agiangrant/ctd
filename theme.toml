@@ -1,0 +1,68 @@
+# Centered Theme Configuration
+# Follows Tailwind CSS conventions - extend or override defaults
+
+[theme]
+
+# Responsive breakpoints (mobile-first, values in pixels)
+# Styles apply at this width and above: sm: ≥640px, md: ≥768px, etc.
+[theme.breakpoints]
+# Uncomment to customize (these are Tailwind v4 defaults)
+# sm = 640
+# md = 768
+# lg = 1024
+# xl = 1280
+# 2xl = 1536
+
+# Extend the default spacing scale
+# Default: 0, px, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, ... 96
+[theme.spacing]
+# Add custom spacing values (uncomment to use)
+# 72 = "18rem"
+# 84 = "21rem"
+# 96 = "24rem"
+
+# Extend or override colors
+# Tailwind v4 includes: slate, gray, zinc, red, orange, amber, yellow, lime,
+# green, emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink, rose
+[theme.colors]
+# Add custom brand colors
+# primary = "#FF6B35"
+# secondary = "#004E89"
+# accent = "#F77F00"
+
+# Or extend existing color palettes
+# [theme.colors.blue]
+# 450 = "#5B9FED"  # Add a shade between 400 and 500
+
+# Extend font families (deprecated - use [fonts] section instead)
+# [theme.fontFamily]
+# sans = "Inter, system-ui, sans-serif"
+# mono = "JetBrains Mono, Menlo, monospace"
+
+# Font family configuration
+# Maps font-* classes to system fonts or bundled font files.
+# Use Tailwind classes like font-sans, font-serif, font-mono, or custom names.
+# File paths are auto-detected as bundled fonts (.ttf, .otf, .woff, .woff2)
+[fonts]
+# Defaults if not specified:
+# sans = "system"              # System default sans-serif
+# serif = "Times New Roman"    # System serif
+# mono = "Menlo"               # System monospace
+
+# Example with bundled font:
+serif = "examples/fontbundle/example.ttf"
+
+# Custom named fonts:
+# brand = "path/to/BrandFont.ttf"
+# display = "Playfair Display"   # System font by name
+
+# Extend font sizes
+# [theme.fontSize]
+# "2xs" = ["10px", "14px"]  # [size, line-height]
+
+# Custom composite utilities (like @apply in Tailwind CSS)
+[utilities]
+# btn-primary = ["bg-blue-500", "hover:bg-blue-600", "text-white", "px-4", "py-2", "rounded", "font-semibold"]
+# btn-secondary = ["bg-gray-200", "hover:bg-gray-300", "text-gray-800", "px-4", "py-2", "rounded", "font-semibold"]
+# card = ["bg-white", "shadow-lg", "rounded-lg", "p-6", "border", "border-gray-200"]
+# input = ["border", "border-gray-300", "rounded", "px-3", "py-2", "focus:border-blue-500", "focus:ring-2", "focus:ring-blue-500"]
