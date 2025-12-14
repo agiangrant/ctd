@@ -864,10 +864,6 @@ impl WgpuBackend {
         let actual_width = frame.texture.width();
         let actual_height = frame.texture.height();
 
-        // Debug: Always log dimensions to catch rotation issues
-        println!("[wgpu] render_frame - cached: {}x{}, actual texture: {}x{}",
-            self.width, self.height, actual_width, actual_height);
-
         // If the frame size differs from our cached size, update our stored dimensions.
         // This ensures coordinate transformations use the correct values.
         if actual_width != self.width || actual_height != self.height {

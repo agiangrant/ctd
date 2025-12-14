@@ -4,6 +4,14 @@ import (
 	"time"
 )
 
+// abs returns the absolute value of a float32.
+func abs(x float32) float32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 // ============================================================================
 // Event Dispatcher
 // ============================================================================
@@ -12,22 +20,39 @@ import (
 // It tracks hover state, focus state, and dispatches events through the widget tree.
 type EventDispatcher struct {
 	// Current state
-	hoveredWidget  *Widget     // Deepest widget currently under the mouse
-	hoveredChain   []*Widget   // All widgets in hover chain (root to deepest)
-	focusedWidget  *Widget     // Widget with keyboard focus
-	pressedWidget  *Widget     // Widget where mouse down occurred
-	pressedChain   []*Widget   // All widgets in pressed chain (root to deepest)
-	pressedButton  MouseButton
+	hoveredWidget *Widget   // Deepest widget currently under the mouse
+	hoveredChain  []*Widget // All widgets in hover chain (root to deepest)
+	focusedWidget *Widget   // Widget with keyboard focus
+	pressedWidget *Widget   // Widget where mouse down occurred
+	pressedChain  []*Widget // All widgets in pressed chain (root to deepest)
+	pressedButton MouseButton
 
 	// For click detection
-	lastClickTime  time.Time
-	lastClickX     float32
-	lastClickY     float32
-	clickCount     int
+	lastClickTime time.Time
+	lastClickX    float32
+	lastClickY    float32
+	clickCount    int
+
+	// Touch/drag gesture tracking (for mobile scrolling)
+	touchStartX     float32   // Where touch/mouse down started
+	touchStartY     float32
+	touchStartTime  time.Time // When touch started
+	isDragging      bool      // True if drag threshold exceeded (scroll mode)
+	dragScrollTarget *Widget  // Scrollable container being dragged
+	lastTouchX      float32   // Last touch position (for delta calculation)
+	lastTouchY      float32
+
+	// Momentum scrolling state
+	momentumVelocityX float32   // Current momentum velocity
+	momentumVelocityY float32
+	momentumTarget    *Widget   // Widget being momentum-scrolled
+	momentumActive    bool      // Whether momentum scrolling is active
+	lastMomentumTime  time.Time // For calculating dt
 
 	// Configuration
 	doubleClickTime time.Duration // Max time between clicks for double-click
 	doubleClickDist float32       // Max distance between clicks for double-click
+	dragThreshold   float32       // Distance to move before drag is detected (pixels)
 
 	// Reference to tree for hit testing
 	tree *Tree
@@ -42,6 +67,7 @@ func NewEventDispatcher(tree *Tree) *EventDispatcher {
 		tree:            tree,
 		doubleClickTime: 500 * time.Millisecond,
 		doubleClickDist: 5.0,
+		dragThreshold:   10.0, // 10px movement triggers drag/scroll instead of click
 	}
 }
 
@@ -239,6 +265,47 @@ func (d *EventDispatcher) DispatchMouseMove(screenX, screenY float32, mods Modif
 
 	needsRedraw := false
 
+	// Check for touch/drag scrolling when pressed
+	if d.pressedWidget != nil && d.dragScrollTarget != nil {
+		// Calculate distance from touch start
+		dx := screenX - d.touchStartX
+		dy := screenY - d.touchStartY
+		distSq := dx*dx + dy*dy
+
+		// Check if we should start dragging (scroll mode)
+		if !d.isDragging && distSq > d.dragThreshold*d.dragThreshold {
+			// Try to scroll - only enter drag mode if scroll actually happened
+			deltaX := d.lastTouchX - screenX
+			deltaY := d.lastTouchY - screenY
+			if d.handleDefaultScroll(d.dragScrollTarget, deltaX, deltaY) {
+				d.isDragging = true
+				d.lastTouchX = screenX
+				d.lastTouchY = screenY
+				return true // Redraw needed
+			}
+			// If scroll didn't happen (content fits), clear scroll target so we don't keep trying
+			d.dragScrollTarget = nil
+		}
+
+		// If already dragging, continue applying scroll delta
+		if d.isDragging {
+			// Calculate delta from last position
+			deltaX := d.lastTouchX - screenX
+			deltaY := d.lastTouchY - screenY
+
+			// Apply scroll
+			if d.handleDefaultScroll(d.dragScrollTarget, deltaX, deltaY) {
+				needsRedraw = true
+			}
+
+			d.lastTouchX = screenX
+			d.lastTouchY = screenY
+
+			// Don't dispatch regular mouse move events while drag-scrolling
+			return needsRedraw
+		}
+	}
+
 	// Handle hover state changes - compare chains not just the deepest widget
 	// This ensures parents stay hovered when mouse moves to child
 	if !d.chainsEqual(d.hoveredChain, newChain) {
@@ -273,6 +340,10 @@ func (d *EventDispatcher) DispatchMouseMove(screenX, screenY float32, mods Modif
 
 // DispatchMouseDown handles mouse button press.
 func (d *EventDispatcher) DispatchMouseDown(screenX, screenY float32, button MouseButton, mods Modifiers) {
+	// Stop any active momentum scrolling
+	d.momentumActive = false
+	d.momentumTarget = nil
+
 	result := d.HitTest(screenX, screenY)
 	if result == nil {
 		// Click on empty space - blur focused widget
@@ -283,6 +354,25 @@ func (d *EventDispatcher) DispatchMouseDown(screenX, screenY float32, button Mou
 	}
 
 	target := result.Widget
+
+	// Track touch start for gesture detection
+	d.touchStartX = screenX
+	d.touchStartY = screenY
+	d.touchStartTime = time.Now()
+	d.lastTouchX = screenX
+	d.lastTouchY = screenY
+	d.isDragging = false
+	d.dragScrollTarget = nil
+
+	// Find scrollable container in the chain for potential drag-to-scroll
+	for i := len(result.Chain) - 1; i >= 0; i-- {
+		w := result.Chain[i]
+		if d.isScrollable(w) {
+			d.dragScrollTarget = w
+			break
+		}
+	}
+
 
 	// Track pressed state - set on entire chain (like hover)
 	d.pressedWidget = target
@@ -308,6 +398,32 @@ func (d *EventDispatcher) DispatchMouseDown(screenX, screenY float32, button Mou
 
 // DispatchMouseUp handles mouse button release.
 func (d *EventDispatcher) DispatchMouseUp(screenX, screenY float32, button MouseButton, mods Modifiers) {
+	// If we were drag-scrolling, start momentum scrolling
+	wasDragging := d.isDragging
+	if wasDragging && d.dragScrollTarget != nil {
+		// Calculate velocity from recent movement
+		elapsed := time.Since(d.touchStartTime).Seconds()
+		if elapsed > 0 && elapsed < 0.5 { // Only if touch was recent
+			dx := screenX - d.touchStartX
+			dy := screenY - d.touchStartY
+
+			// Velocity in pixels per second, scaled for momentum
+			d.momentumVelocityX = -dx / float32(elapsed) * 0.3
+			d.momentumVelocityY = -dy / float32(elapsed) * 0.3
+
+			// Only start momentum if velocity is significant
+			if abs(d.momentumVelocityX) > 50 || abs(d.momentumVelocityY) > 50 {
+				d.momentumTarget = d.dragScrollTarget
+				d.momentumActive = true
+				d.lastMomentumTime = time.Now()
+			}
+		}
+	}
+
+	// Reset drag state
+	d.isDragging = false
+	d.dragScrollTarget = nil
+
 	result := d.HitTest(screenX, screenY)
 	var target *Widget
 	var localX, localY float32
@@ -320,8 +436,8 @@ func (d *EventDispatcher) DispatchMouseUp(screenX, screenY float32, button Mouse
 		chain = result.Chain
 	}
 
-	// Dispatch mouse up to the widget under cursor
-	if target != nil {
+	// Dispatch mouse up to the widget under cursor (but not if we were drag-scrolling)
+	if target != nil && !wasDragging {
 		e := NewMouseEvent(EventMouseUp, screenX, screenY, button, mods)
 		e.LocalX = localX
 		e.LocalY = localY
@@ -338,7 +454,7 @@ func (d *EventDispatcher) DispatchMouseUp(screenX, screenY float32, button Mouse
 
 		// If mouse up happened outside the pressed widget, still notify it
 		// This is important for drag operations (like sliders) that need to know when dragging ends
-		if target != d.pressedWidget && button == d.pressedButton {
+		if target != d.pressedWidget && button == d.pressedButton && !wasDragging {
 			bounds := d.pressedWidget.ComputedBounds()
 			pressedLocalX, pressedLocalY := bounds.LocalPoint(screenX, screenY)
 			e := NewMouseEvent(EventMouseUp, screenX, screenY, button, mods)
@@ -348,7 +464,8 @@ func (d *EventDispatcher) DispatchMouseUp(screenX, screenY float32, button Mouse
 			e.Release()
 		}
 
-		if target == d.pressedWidget && button == d.pressedButton {
+		// Only trigger click if we weren't drag-scrolling
+		if target == d.pressedWidget && button == d.pressedButton && !wasDragging {
 			// It's a click! Check for double-click
 			d.handleClick(target, screenX, screenY, localX, localY, button, mods, chain)
 		}
@@ -443,48 +560,70 @@ func (d *EventDispatcher) DispatchMouseWheel(screenX, screenY, deltaX, deltaY fl
 // Returns true if the widget handled the scroll.
 func (d *EventDispatcher) handleDefaultScroll(w *Widget, deltaX, deltaY float32) bool {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	// Check if widget has scroll/auto overflow
 	canScrollY := w.overflowY == "scroll" || w.overflowY == "auto" || (w.kind == KindScrollView && w.scrollEnabled)
 	canScrollX := w.overflowX == "scroll" || w.overflowX == "auto"
 
 	if !canScrollY && !canScrollX {
+		w.mu.Unlock()
 		return false
 	}
 
-	// Calculate content bounds for scroll limits
-	// Content area starts at parent position + padding
-	contentStartX := w.computedLayout.X + w.padding[3] // left padding
-	contentStartY := w.computedLayout.Y + w.padding[0] // top padding
+	// Get viewport dimensions from computed layout
+	viewportWidth := w.computedLayout.Width - w.padding[1] - w.padding[3]
+	viewportHeight := w.computedLayout.Height - w.padding[0] - w.padding[2]
 
-	// Find the extent of all children relative to the content area start
-	contentHeight := float32(0)
+	// Calculate content size - use intrinsic size of children, not their constrained layout size
+	// This is critical because children may be constrained to fit the viewport, but their
+	// natural content size determines how much we can scroll
 	contentWidth := float32(0)
+	contentHeight := float32(0)
 
-	for _, child := range w.children {
-		child.mu.RLock()
-		// Child positions are in layout space (not affected by scroll)
-		// Calculate their extent relative to content area start
-		childBottom := child.computedLayout.Y - contentStartY + child.computedLayout.Height
-		childRight := child.computedLayout.X - contentStartX + child.computedLayout.Width
-		child.mu.RUnlock()
-
-		if childBottom > contentHeight {
-			contentHeight = childBottom
-		}
-		if childRight > contentWidth {
-			contentWidth = childRight
-		}
+	// If contentWidth/contentHeight are explicitly set, use those
+	if w.contentWidth > 0 {
+		contentWidth = w.contentWidth
+	}
+	if w.contentHeight > 0 {
+		contentHeight = w.contentHeight
 	}
 
-	// Add bottom/right padding to content size so scrolling reveals padding at the end
-	contentHeight += w.padding[2] // bottom padding
-	contentWidth += w.padding[1]  // right padding
+	// Otherwise calculate from children's intrinsic sizes
+	if contentWidth == 0 || contentHeight == 0 {
+		children := w.children
+		padding := w.padding
+		gap := w.gap
+		w.mu.Unlock() // Unlock before calling calculateIntrinsicSize (which needs to lock children)
 
-	viewportHeight := w.computedLayout.Height - w.padding[0] - w.padding[2]
-	viewportWidth := w.computedLayout.Width - w.padding[1] - w.padding[3]
+		// Sum up intrinsic heights of all children (assuming vertical scroll)
+		totalIntrinsicHeight := float32(0)
+		maxIntrinsicWidth := float32(0)
+		numChildren := 0
 
+		for _, child := range children {
+			childW, childH := calculateIntrinsicSize(child, viewportWidth)
+			totalIntrinsicHeight += childH
+			if childW > maxIntrinsicWidth {
+				maxIntrinsicWidth = childW
+			}
+			numChildren++
+		}
+
+		// Add gaps between children
+		if numChildren > 1 {
+			totalIntrinsicHeight += gap * float32(numChildren-1)
+		}
+
+		// Add padding
+		if contentWidth == 0 {
+			contentWidth = maxIntrinsicWidth + padding[1] + padding[3]
+		}
+		if contentHeight == 0 {
+			contentHeight = totalIntrinsicHeight + padding[0] + padding[2]
+		}
+
+		w.mu.Lock() // Re-lock for the scroll update
+	}
 
 	scrolled := false
 
@@ -496,7 +635,7 @@ func (d *EventDispatcher) handleDefaultScroll(w *Widget, deltaX, deltaY float32)
 		}
 
 		oldScrollY := w.scrollY
-		w.scrollY -= deltaY // Negative because scroll direction is inverted
+		w.scrollY += deltaY // Drag up (positive delta) = scroll down (increase scrollY)
 
 		// Clamp
 		if w.scrollY < 0 {
@@ -519,7 +658,7 @@ func (d *EventDispatcher) handleDefaultScroll(w *Widget, deltaX, deltaY float32)
 		}
 
 		oldScrollX := w.scrollX
-		w.scrollX -= deltaX
+		w.scrollX += deltaX // Drag left (positive delta) = scroll right (increase scrollX)
 
 		// Clamp
 		if w.scrollX < 0 {
@@ -539,6 +678,61 @@ func (d *EventDispatcher) handleDefaultScroll(w *Widget, deltaX, deltaY float32)
 		if w.tree != nil {
 			w.tree.notifyUpdate(w, DirtyScroll)
 		}
+	}
+
+	w.mu.Unlock()
+	return scrolled
+}
+
+// isScrollable returns true if the widget can be scrolled.
+func (d *EventDispatcher) isScrollable(w *Widget) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.overflowY == "scroll" || w.overflowY == "auto" ||
+		w.overflowX == "scroll" || w.overflowX == "auto" ||
+		(w.kind == KindScrollView && w.scrollEnabled)
+}
+
+// IsMomentumScrolling returns true if momentum scrolling is currently active.
+func (d *EventDispatcher) IsMomentumScrolling() bool {
+	return d.momentumActive
+}
+
+// UpdateMomentumScroll applies momentum scrolling physics.
+// Returns true if scrolling occurred and a redraw is needed.
+// Should be called each frame while IsMomentumScrolling() returns true.
+func (d *EventDispatcher) UpdateMomentumScroll() bool {
+	if !d.momentumActive || d.momentumTarget == nil {
+		return false
+	}
+
+	now := time.Now()
+	dt := float32(now.Sub(d.lastMomentumTime).Seconds())
+	d.lastMomentumTime = now
+
+	// Apply friction (deceleration)
+	friction := float32(0.95) // Per-frame multiplier
+	d.momentumVelocityX *= friction
+	d.momentumVelocityY *= friction
+
+	// Calculate scroll delta for this frame
+	deltaX := d.momentumVelocityX * dt
+	deltaY := d.momentumVelocityY * dt
+
+	// Stop if velocity is negligible
+	if abs(d.momentumVelocityX) < 10 && abs(d.momentumVelocityY) < 10 {
+		d.momentumActive = false
+		d.momentumTarget = nil
+		return false
+	}
+
+	// Apply scroll
+	scrolled := d.handleDefaultScroll(d.momentumTarget, deltaX, deltaY)
+
+	// Stop momentum if scroll hit bounds (couldn't scroll)
+	if !scrolled {
+		d.momentumActive = false
+		d.momentumTarget = nil
 	}
 
 	return scrolled

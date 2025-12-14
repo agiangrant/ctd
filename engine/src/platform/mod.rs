@@ -1,10 +1,33 @@
 //! Platform abstraction layer
 //!
-//! This module provides cross-platform rendering using wgpu, which handles
-//! Metal (macOS/iOS), Vulkan (Linux/Android), Direct3D 12 (Windows), and WebGPU.
+//! This module provides cross-platform rendering and window management.
+//! Each platform has its own native backend implementation:
+//! - macOS: AppKit via objc2
+//! - iOS: UIKit via objc2
+//! - Windows: Win32 (planned)
+//! - Linux: X11/Wayland (planned)
+//!
+//! The wgpu backend handles actual GPU rendering on all platforms.
 
+pub mod backend;
 pub mod wgpu_backend;
 pub mod window_styling;
 
+// Native platform backends (bypassing winit)
+// Currently only iOS uses this - desktop uses winit
+#[cfg(target_os = "ios")]
+pub mod ios;
+
+// macOS native backend - kept for reference but not used (winit works fine on macOS)
+// Uncomment to use direct AppKit instead of winit
+// #[cfg(target_os = "macos")]
+// pub mod macos;
+
+// Re-exports
+pub use backend::{AppConfig, EventCallback, EventResponse, PlatformBackend, PlatformEvent, SafeAreaInsets};
 pub use wgpu_backend::{SurfaceConfig, WgpuBackend};
 pub use window_styling::{apply_window_style, WindowStyleOptions};
+
+// Platform-specific backend alias (only iOS uses native backend, others use winit)
+#[cfg(target_os = "ios")]
+pub use ios::IosBackend as NativeBackend;

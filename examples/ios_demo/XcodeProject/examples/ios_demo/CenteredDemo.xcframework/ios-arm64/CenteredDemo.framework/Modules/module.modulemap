@@ -1,8 +1,0 @@
-framework module "CenteredDemo" {
-	header "ref.h"
-    header "Ios_demo.objc.h"
-    header "Universe.objc.h"
-    header "CenteredDemo.h"
-
-    export *
-}

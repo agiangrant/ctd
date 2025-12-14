@@ -2,6 +2,7 @@ package retained
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -2130,4 +2131,44 @@ func ClampScrollPositions(root *Widget) {
 	}
 
 	clampScroll(root)
+}
+
+// SyncBoundsFromLayout updates the cached screen-space bounds (used for hit testing)
+// from the computed layout positions. This should be called after ComputeLayout
+// to ensure hit testing works correctly before the next render.
+// This is especially important after window resize, where the layout changes
+// but we haven't rendered yet.
+func SyncBoundsFromLayout(root *Widget) {
+	if root == nil {
+		return
+	}
+
+	var syncBounds func(w *Widget, depth int)
+	syncBounds = func(w *Widget, depth int) {
+		w.mu.Lock()
+		layout := w.computedLayout
+		// Update bounds from layout
+		w.computedBounds = Bounds{
+			X:      layout.X,
+			Y:      layout.Y,
+			Width:  layout.Width,
+			Height: layout.Height,
+		}
+		if depth == 0 {
+			log.Printf("SyncBoundsFromLayout: root bounds set to (%.1f,%.1f,%.1f,%.1f)",
+				layout.X, layout.Y, layout.Width, layout.Height)
+		}
+		children := acquireWidgetSlice(len(w.children))
+		copy(children, w.children)
+		w.mu.Unlock()
+
+		// Recursively sync children
+		for _, child := range children {
+			syncBounds(child, depth+1)
+		}
+
+		releaseWidgetSlice(children)
+	}
+
+	syncBounds(root, 0)
 }

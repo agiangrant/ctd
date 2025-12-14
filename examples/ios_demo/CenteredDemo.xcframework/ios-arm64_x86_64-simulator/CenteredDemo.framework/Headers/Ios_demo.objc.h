@@ -40,13 +40,21 @@
 FOUNDATION_EXPORT void Ios_demoDummy(void);
 
 /**
+ * IOSMain is the entry point for the iOS app.
+This should be called from main.m (which is the actual iOS entry point).
+It handles the full app lifecycle via ffi.Run().
+ */
+FOUNDATION_EXPORT void Ios_demoIOSMain(void);
+
+/**
  * Main is exported for testing on desktop
  */
 FOUNDATION_EXPORT void Ios_demoMain(void);
 
 /**
  * StartDemo initializes and starts the demo app.
-This should be called from the iOS app's initialization.
+On iOS, this is called via IOSMain().
+On desktop, this can be called directly for testing.
  */
 FOUNDATION_EXPORT void Ios_demoStartDemo(void);
 

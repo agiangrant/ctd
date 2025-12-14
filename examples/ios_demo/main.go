@@ -4,8 +4,13 @@
 //
 // Then integrate CenteredDemo.xcframework into an Xcode project.
 //
-// Note: Full wgpu rendering requires winit to own the app lifecycle.
-// This demo tests FFI integration with text measurement and other non-windowing APIs.
+// Architecture:
+// - main.m calls IOSMain() which is the entry point
+// - IOSMain() calls ffi.Run() which handles the iOS-specific flow:
+//   1. Registers Go's ready callback with Rust
+//   2. Calls centered_ios_main() which starts UIApplicationMain (never returns)
+//   3. When iOS app is ready, Rust calls Go's ready callback
+//   4. Go's callback registers the event handler for rendering
 package ios_demo
 
 import (
@@ -27,10 +32,18 @@ var (
 	clickCount int
 )
 
+// IOSMain is the entry point for the iOS app.
+// This should be called from main.m (which is the actual iOS entry point).
+// It handles the full app lifecycle via ffi.Run().
+func IOSMain() {
+	StartDemo()
+}
+
 // StartDemo initializes and starts the demo app.
-// This should be called from the iOS app's initialization.
+// On iOS, this is called via IOSMain().
+// On desktop, this can be called directly for testing.
 func StartDemo() {
-	log.Printf("Starting Centered iOS Demo...")
+	log.Printf("=== Starting Centered iOS Demo (UPDATED BUILD) ===")
 	log.Printf("runtime.GOOS = %s", runtime.GOOS)
 	log.Printf("runtime.GOARCH = %s", runtime.GOARCH)
 
@@ -131,7 +144,8 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 	// Footer
 	footer := retained.Text("Built with Centered Framework", "text-gray-600 text-xs")
 
-	root := retained.VStack("bg-gray-900 w-full h-full gap-2 p-4",
+	// Scrollable content container
+	scrollContent := retained.VStack("gap-2 p-4 w-full",
 		title,
 		subtitle,
 		counterCard,
@@ -142,8 +156,29 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		refs.Button3,
 		refs.StatusText,
 		featureCard,
+		// Add extra items to ensure scrollable content
+		retained.Text("Scroll down for more →", "text-gray-500 text-sm mt-4"),
+		retained.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
+			retained.Text("More Features", "text-white text-lg font-semibold"),
+			retained.Text("✓ Touch scrolling", "text-green-400 text-sm"),
+			retained.Text("✓ Momentum scrolling", "text-green-400 text-sm"),
+			retained.Text("✓ Gesture recognition", "text-green-400 text-sm"),
+		),
+		retained.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
+			retained.Text("Platform Support", "text-white text-lg font-semibold"),
+			retained.Text("✓ macOS", "text-blue-400 text-sm"),
+			retained.Text("✓ iOS", "text-blue-400 text-sm"),
+			retained.Text("○ Android (planned)", "text-gray-500 text-sm"),
+			retained.Text("○ Windows (planned)", "text-gray-500 text-sm"),
+			retained.Text("○ Linux (planned)", "text-gray-500 text-sm"),
+		),
 		footer,
 	)
+
+	// Root container with vertical scrolling enabled
+	// Note: flex-col is needed so the container properly calculates content height for scrolling
+	root := retained.VStack("bg-gray-900 w-full h-full overflow-y-auto flex flex-col").
+		WithChildren(scrollContent)
 
 	return root, refs
 }

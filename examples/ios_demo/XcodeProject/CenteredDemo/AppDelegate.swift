@@ -1,7 +1,15 @@
-import UIKit
-import CenteredDemo
+// AppDelegate.swift - DEPRECATED
+// This file is no longer used. The app lifecycle is now owned by Rust via main.m.
+// Rust's CenteredAppDelegate handles UIApplicationDelegate callbacks.
+// Kept for reference only.
 
-@main
+import UIKit
+
+// NOTE: @main removed - entry point is now main.m which calls centered_ios_main()
+// The Rust engine creates its own UIApplication and UIWindow with CenteredAppDelegate.
+
+/*
+// Old implementation - no longer used:
 class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
@@ -9,16 +17,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        print("AppDelegate: didFinishLaunching called")
-        NSLog("AppDelegate: About to call Go StartDemo()")
-
-        // Call Go to start the Centered app
-        // Winit will create its own window and manage the event loop
-        DispatchQueue.main.async {
-            NSLog("AppDelegate: Calling Ios_demoStartDemo() on main queue")
-            Ios_demoStartDemo()
-            NSLog("AppDelegate: Ios_demoStartDemo() returned")
-        }
+        // This is now handled by Rust's CenteredAppDelegate
         return true
     }
 }
+*/

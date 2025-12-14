@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,10 +20,10 @@ import (
 // textMeasureCache is an LRU cache for text width measurements.
 // This prevents repeated FFI calls for the same text/font combinations.
 type textMeasureCache struct {
-	mu       sync.Mutex
-	maxSize  int
-	cache    map[string]*list.Element
-	lru      *list.List // Front = most recently used
+	mu      sync.Mutex
+	maxSize int
+	cache   map[string]*list.Element
+	lru     *list.List // Front = most recently used
 }
 
 type cacheEntry struct {
@@ -398,10 +399,10 @@ type Loop struct {
 // scrollContext tracks the current scroll view for sticky positioning
 type scrollContext struct {
 	// Viewport bounds (where the scroll view appears on screen)
-	viewportX, viewportY     float32
-	viewportW, viewportH     float32
+	viewportX, viewportY float32
+	viewportW, viewportH float32
 	// Current scroll offset (how much content has scrolled)
-	scrollX, scrollY         float32
+	scrollX, scrollY float32
 	// Content start position (where content begins before scrolling)
 	contentStartX, contentStartY float32
 }
@@ -639,18 +640,40 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		return ffi.FrameResponse{RequestRedraw: needsRedraw}
 
 	case ffi.EventMousePressed:
-		// MousePressed events don't include position (winit limitation)
-		// Use the last known mouse position from MouseMoved events
-		button := l.convertMouseButton(event.MouseButton())
-		l.events.DispatchMouseDown(l.mouseX, l.mouseY, button, l.convertModifiers(event.Modifiers()))
+		var x, y float32
+		var button MouseButton
+		if runtime.GOOS == "ios" {
+			// On iOS, TouchBegan sends x/y coordinates in Data1/Data2
+			x, y = float32(event.MouseX()), float32(event.MouseY())
+			button = MouseButtonLeft // Touch is always "left click"
+			// Update cached position for consistency
+			l.mouseX, l.mouseY = x, y
+		} else {
+			// On desktop, MousePressed events don't include position (winit limitation)
+			// Use the last known mouse position from MouseMoved events
+			x, y = l.mouseX, l.mouseY
+			button = l.convertMouseButton(event.MouseButton())
+		}
+		l.events.DispatchMouseDown(x, y, button, l.convertModifiers(event.Modifiers()))
 		// Always redraw on press to show active state
 		return ffi.FrameResponse{RequestRedraw: true}
 
 	case ffi.EventMouseReleased:
-		// MouseReleased events don't include position (winit limitation)
-		// Use the last known mouse position from MouseMoved events
-		button := l.convertMouseButton(event.MouseButton())
-		l.events.DispatchMouseUp(l.mouseX, l.mouseY, button, l.convertModifiers(event.Modifiers()))
+		var x, y float32
+		var button MouseButton
+		if runtime.GOOS == "ios" {
+			// On iOS, TouchEnded sends x/y coordinates in Data1/Data2
+			x, y = float32(event.MouseX()), float32(event.MouseY())
+			button = MouseButtonLeft // Touch is always "left click"
+			// Update cached position for consistency
+			l.mouseX, l.mouseY = x, y
+		} else {
+			// On desktop, MouseReleased events don't include position (winit limitation)
+			// Use the last known mouse position from MouseMoved events
+			x, y = l.mouseX, l.mouseY
+			button = l.convertMouseButton(event.MouseButton())
+		}
+		l.events.DispatchMouseUp(x, y, button, l.convertModifiers(event.Modifiers()))
 		// Always redraw on release to clear active state
 		return ffi.FrameResponse{RequestRedraw: true}
 
@@ -864,8 +887,8 @@ func (l *Loop) tick() ffi.FrameResponse {
 	l.processPendingTextureUnloads()
 
 	if l.paused.Load() {
-		// When paused, still request redraw if animations are active
-		return ffi.FrameResponse{RequestRedraw: l.animations.HasActive()}
+		// When paused, still request redraw if animations or momentum scrolling are active
+		return ffi.FrameResponse{RequestRedraw: l.animations.HasActive() || l.events.IsMomentumScrolling()}
 	}
 
 	now := time.Now()
@@ -876,6 +899,9 @@ func (l *Loop) tick() ffi.FrameResponse {
 	// Tick all animations - this updates widget properties
 	// Animations modify widgets which will be included in the single FFI batch
 	hasActiveAnimations := l.animations.Tick(now)
+
+	// Update momentum scrolling (for touch/swipe scrolling)
+	hasMomentumScrolling := l.events.UpdateMomentumScroll()
 
 	// Update cursor blink for focused text input widgets
 	hasTextInputFocused := l.updateCursorBlink()
@@ -892,6 +918,9 @@ func (l *Loop) tick() ffi.FrameResponse {
 	// to ensure they don't exceed the new bounds
 	if layoutChanged {
 		ClampScrollPositions(l.tree.Root())
+		// Also sync hit-testing bounds from layout immediately so that
+		// touch/mouse events work correctly before the next render completes
+		SyncBoundsFromLayout(l.tree.Root())
 	}
 
 	frameNum := l.tree.IncrementFrame()
@@ -928,7 +957,7 @@ func (l *Loop) tick() ffi.FrameResponse {
 	// - Streaming video (receiving live frames) needs continuous updates
 	// - Otherwise, only redraw when something changes (events will trigger redraws)
 	hasImmediateDraws := len(frame.immediateCommands) > 0
-	needsContinuousRedraw := hasActiveAnimations || hasTextInputFocused || hasPlayingVideo || hasPlayingAudio || hasStreamingVideo || (l.onFrame != nil && hasImmediateDraws)
+	needsContinuousRedraw := hasActiveAnimations || hasMomentumScrolling || hasTextInputFocused || hasPlayingVideo || hasPlayingAudio || hasStreamingVideo || (l.onFrame != nil && hasImmediateDraws)
 
 	return ffi.FrameResponse{
 		ImmediateCommands: commands,
@@ -1646,8 +1675,8 @@ func (l *Loop) layoutAndRenderChildrenFlex(
 	// This code path is used when ComputeLayout hasn't been called
 
 	// Content area after padding
-	contentX := parentX + padding[3]              // left padding
-	contentY := parentY + padding[0]              // top padding
+	contentX := parentX + padding[3] // left padding
+	contentY := parentY + padding[0] // top padding
 	contentWidth := parentWidth - padding[1] - padding[3]
 	contentHeight := parentHeight - padding[0] - padding[2]
 
@@ -3432,7 +3461,7 @@ func (l *Loop) renderSelect(commands []ffi.RenderCommand, w *Widget, x, y, width
 	}
 
 	// Determine displayed text
-	displayText := w.text // placeholder
+	displayText := w.text           // placeholder
 	textColor := uint32(0x9CA3AFFF) // gray-400 for placeholder
 	if w.selectIndex >= 0 && w.selectIndex < len(w.selectOptions) {
 		displayText = w.selectOptions[w.selectIndex].Label

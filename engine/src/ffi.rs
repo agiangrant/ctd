@@ -678,21 +678,36 @@ pub unsafe extern "C" fn centered_backend_render_frame(
         }
     };
 
-    // Get the backend and render
-    let backend_lock = get_backend();
-    let mut guard = backend_lock.lock().unwrap();
-
-    if let Some(backend) = guard.as_mut() {
-        match backend.render_frame(&commands) {
-            Ok(()) => 0,
+    // On iOS, use the thread-local backend
+    #[cfg(target_os = "ios")]
+    {
+        match crate::platform::ios::render_frame(&commands) {
+            Ok(()) => return 0,
             Err(e) => {
-                eprintln!("Render error: {}", e);
-                -4
+                eprintln!("iOS render error: {}", e);
+                return -4;
             }
         }
-    } else {
-        eprintln!("Backend not initialized");
-        -5
+    }
+
+    // On other platforms, use the global backend
+    #[cfg(not(target_os = "ios"))]
+    {
+        let backend_lock = get_backend();
+        let mut guard = backend_lock.lock().unwrap();
+
+        if let Some(backend) = guard.as_mut() {
+            match backend.render_frame(&commands) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("Render error: {}", e);
+                    -4
+                }
+            }
+        } else {
+            eprintln!("Backend not initialized");
+            -5
+        }
     }
 }
 
@@ -1444,6 +1459,10 @@ pub enum AppEventType {
     CharInput = 9,
     /// Mouse wheel scrolled (data: delta_x, delta_y)
     MouseWheel = 10,
+    /// App suspended (iOS backgrounded)
+    Suspended = 11,
+    /// App resumed (iOS foregrounded)
+    Resumed = 12,
 }
 
 /// Event data passed to callback
@@ -1947,6 +1966,14 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        // Log all window events for debugging
+        match &event {
+            WindowEvent::Resized(_) | WindowEvent::Touch(_) | WindowEvent::RedrawRequested => {
+                println!("[FFI] window_event: {:?}", event);
+            }
+            _ => {}
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 let event = AppEvent {
@@ -2205,6 +2232,11 @@ impl ApplicationHandler<UserEvent> for App {
                     .map(|w| w.scale_factor())
                     .unwrap_or(1.0);
 
+                println!(
+                    "[FFI] Touch event: phase={:?}, location=({:.1}, {:.1}), scale={:.1}",
+                    touch.phase, touch.location.x, touch.location.y, scale_factor
+                );
+
                 match touch.phase {
                     winit::event::TouchPhase::Started => {
                         // First send mouse move to update position (touch includes location)
@@ -2352,6 +2384,213 @@ pub unsafe extern "C" fn centered_app_run(
 
     let config = &*config;
 
+    // On iOS, use our native UIKit backend instead of winit
+    #[cfg(target_os = "ios")]
+    {
+        return run_ios_app(config, callback);
+    }
+
+    // On desktop platforms, use winit
+    #[cfg(not(target_os = "ios"))]
+    {
+        return run_winit_app(config, callback);
+    }
+}
+
+/// iOS main entry point - call this from main.m instead of UIApplicationMain
+/// This allows Rust to own the entire iOS app lifecycle.
+///
+/// Usage in main.m:
+/// ```objc
+/// extern int centered_ios_main(int argc, char * argv[]);
+/// int main(int argc, char * argv[]) {
+///     return centered_ios_main(argc, argv);
+/// }
+/// ```
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn centered_ios_main(argc: i32, argv: *mut *mut i8) -> i32 {
+    println!("[FFI] centered_ios_main called");
+
+    // CRITICAL: Register the AppDelegate class with the ObjC runtime BEFORE
+    // calling UIApplicationMain. Without this, UIApplicationMain can't find
+    // the class by name and will crash.
+    crate::platform::ios::register_app_delegate_class();
+
+    // Flow:
+    // 1. main.m (or Go) calls centered_ios_main
+    // 2. We register CenteredAppDelegate with the ObjC runtime
+    // 3. UIApplicationMain starts with our delegate
+    // 4. AppDelegate.didFinishLaunching creates the window/view
+    // 5. It calls Go's ready callback (registered via centered_ios_set_ready_callback)
+    // 6. Go registers its event handler via centered_app_run
+
+    unsafe {
+        extern "C" {
+            fn UIApplicationMain(
+                argc: i32,
+                argv: *mut *mut i8,
+                principal_class_name: *const objc2::runtime::AnyObject,
+                delegate_class_name: *const objc2::runtime::AnyObject,
+            ) -> i32;
+        }
+
+        let delegate_class = objc2_foundation::NSString::from_str("CenteredAppDelegate");
+
+        println!("[FFI] Calling UIApplicationMain with delegate: CenteredAppDelegate");
+
+        UIApplicationMain(
+            argc,
+            argv,
+            std::ptr::null(),
+            &*delegate_class as *const _ as *const objc2::runtime::AnyObject,
+        )
+    }
+}
+
+/// iOS-specific app runner using native UIKit
+/// On iOS, this is called from Go's ready handler (after UIApplicationMain is already running).
+/// It just registers the callback - the event loop is already running.
+#[cfg(target_os = "ios")]
+unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
+    use crate::platform::ios::register_callback;
+    use crate::platform::backend::{PlatformEvent, EventResponse};
+
+    println!("[FFI] run_ios_app: registering callback");
+
+    // Wrap the C callback in a Rust closure that translates events
+    let user_data = config.user_data;
+    let c_callback = callback;
+
+    let rust_callback = move |event: PlatformEvent| -> EventResponse {
+        // Translate PlatformEvent to AppEvent
+        let app_event = match event {
+            PlatformEvent::Ready { width, height, scale_factor } => AppEvent {
+                event_type: AppEventType::Ready,
+                data1: width,
+                data2: height,
+                scale_factor,
+            },
+            PlatformEvent::RedrawRequested => AppEvent {
+                event_type: AppEventType::RedrawRequested,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::Resized { width, height, scale_factor } => AppEvent {
+                event_type: AppEventType::Resized,
+                data1: width,
+                data2: height,
+                scale_factor,
+            },
+            PlatformEvent::CloseRequested => AppEvent {
+                event_type: AppEventType::CloseRequested,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchBegan { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MousePressed,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchMoved { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MouseMoved,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchEnded { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MouseReleased,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchCancelled { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MouseReleased,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::Resumed => AppEvent {
+                event_type: AppEventType::Resumed,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::Suspended => AppEvent {
+                event_type: AppEventType::Suspended,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            _ => return EventResponse::default(),
+        };
+
+        // Call the C callback
+        let mut frame_response = FrameResponse {
+            immediate_commands: std::ptr::null_mut(),
+            widget_delta: std::ptr::null_mut(),
+            request_redraw: false,
+        };
+
+        c_callback(&app_event, &mut frame_response, user_data);
+
+        // iOS-specific: Process immediate commands if provided
+        // In retained mode, commands are only sent when widgets are dirty
+        if !frame_response.immediate_commands.is_null() {
+            let json_str = match std::ffi::CStr::from_ptr(frame_response.immediate_commands).to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!("[iOS] Invalid UTF-8 in immediate commands");
+                    return EventResponse {
+                        request_redraw: frame_response.request_redraw,
+                        exit: false,
+                    };
+                }
+            };
+
+            // Skip rendering if JSON is empty array "[]"
+            if json_str.len() > 2 {
+                let commands: Vec<RenderCommand> = match serde_json::from_str(json_str) {
+                    Ok(cmds) => cmds,
+                    Err(e) => {
+                        eprintln!("[iOS] Failed to parse render commands: {}", e);
+                        return EventResponse {
+                            request_redraw: frame_response.request_redraw,
+                            exit: false,
+                        };
+                    }
+                };
+
+                if !commands.is_empty() {
+                    if let Err(e) = crate::platform::ios::render_frame(&commands) {
+                        eprintln!("[iOS] Render error: {}", e);
+                    }
+                }
+            }
+        }
+
+        EventResponse {
+            request_redraw: frame_response.request_redraw,
+            exit: false, // FrameResponse doesn't have exit
+        }
+    };
+
+    // On iOS, just register the callback - UIApplicationMain is already running
+    register_callback(Box::new(rust_callback));
+
+    println!("[FFI] run_ios_app: callback registered, returning");
+
+    // Return 0 - the event loop is already running via UIApplicationMain
+    // This function returns immediately on iOS (unlike desktop where it blocks)
+    0
+}
+
+/// Desktop app runner using winit
+#[cfg(not(target_os = "ios"))]
+unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
     // Create event loop with custom user event type for cross-thread signaling
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(el) => el,

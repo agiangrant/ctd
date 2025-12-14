@@ -131,6 +131,10 @@ var (
 	fnSystemDarkMode func() int32
 	fnFreeString     func(ptr uintptr)
 
+	// iOS-specific functions (only loaded on iOS)
+	fnIosSetReadyCallback func(callback uintptr)
+	fnIosMain             func(argc int32, argv uintptr) int32
+
 	// Clipboard functions (Rust implementation)
 	fnClipboardGet func() uintptr
 	fnClipboardSet func(text uintptr)
@@ -302,6 +306,7 @@ func initLibrary() error {
 
 		// Register all function pointers
 		registerCoreFunctions()
+		registerIOSFunctions()
 		registerImageFunctions()
 		registerTextFunctions()
 		registerAudioFunctions()
@@ -330,6 +335,14 @@ func registerCoreFunctions() {
 	purego.RegisterLibFunc(&fnWindowToggleFullscreen, libHandle, "centered_window_toggle_fullscreen")
 	purego.RegisterLibFunc(&fnWindowClose, libHandle, "centered_window_close")
 	purego.RegisterLibFunc(&fnWindowSetTitle, libHandle, "centered_window_set_title")
+}
+
+func registerIOSFunctions() {
+	if runtime.GOOS != "ios" {
+		return
+	}
+	purego.RegisterLibFunc(&fnIosSetReadyCallback, libHandle, "centered_ios_set_ready_callback")
+	purego.RegisterLibFunc(&fnIosMain, libHandle, "centered_ios_main")
 }
 
 func registerImageFunctions() {
@@ -819,6 +832,10 @@ var (
 	globalHandler EventHandler
 	globalMutex   sync.Mutex
 	callbackPtr   uintptr
+
+	// iOS-specific state
+	iosReadyCallbackPtr uintptr
+	iosStoredConfig     *AppConfig
 )
 
 // appCallback is the callback function called from Rust
@@ -831,8 +848,13 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
 		return
 	}
 
+	if eventPtr == 0 {
+		return
+	}
+
 	// Read event from memory
 	event := (*AppEventC)(unsafe.Pointer(eventPtr))
+
 	goEvent := Event{
 		Type:        EventType(event.EventType),
 		Data1:       event.Data1,
@@ -851,16 +873,28 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
 
 	// Render immediate commands
 	if len(goResponse.ImmediateCommands) > 0 {
-		transport := GetTransport()
-		if transport != nil && transport.Mode() == TransportSharedMemory {
-			_ = RenderFrameBinary(goResponse.ImmediateCommands)
-		} else {
+		// On iOS, always use JSON response path (shared memory transport uses
+		// global backend which doesn't work with iOS thread-local backend)
+		if runtime.GOOS == "ios" {
 			jsonBytes, err := json.Marshal(goResponse.ImmediateCommands)
 			if err == nil {
 				// Allocate string for Rust
 				b := append(jsonBytes, 0)
 				response.ImmediateCommands = uintptr(unsafe.Pointer(&b[0]))
 				runtime.KeepAlive(b)
+			}
+		} else {
+			transport := GetTransport()
+			if transport != nil && transport.Mode() == TransportSharedMemory {
+				_ = RenderFrameBinary(goResponse.ImmediateCommands)
+			} else {
+				jsonBytes, err := json.Marshal(goResponse.ImmediateCommands)
+				if err == nil {
+					// Allocate string for Rust
+					b := append(jsonBytes, 0)
+					response.ImmediateCommands = uintptr(unsafe.Pointer(&b[0]))
+					runtime.KeepAlive(b)
+				}
 			}
 		}
 	}
@@ -874,6 +908,87 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
 			runtime.KeepAlive(b)
 		}
 	}
+}
+
+// iosReadyCallback is called by Rust when the iOS app is ready (after didFinishLaunching).
+// This function then calls fnAppRun to register the event callback with the iOS backend.
+func iosReadyCallback() {
+	log.Println("[FFI] iOS app ready, registering event callback")
+
+	config := iosStoredConfig
+	if config == nil {
+		log.Println("[FFI] ERROR: iosStoredConfig is nil")
+		return
+	}
+
+	// Create callback
+	callbackPtr = purego.NewCallback(appCallback)
+
+	// Prepare config struct
+	titleBytes := append([]byte(config.Title), 0)
+	titlePtr := uintptr(unsafe.Pointer(&titleBytes[0]))
+
+	cConfig := AppConfigC{
+		Title:                 titlePtr,
+		Width:                 config.Width,
+		Height:                config.Height,
+		VSync:                 config.VSync,
+		LowPowerGPU:           config.LowPowerGPU,
+		AllowSoftwareFallback: config.AllowSoftwareFallback,
+		UserData:              0,
+		Decorations:           config.Decorations,
+		Transparent:           config.Transparent,
+		Resizable:             config.Resizable,
+		AlwaysOnTop:           config.AlwaysOnTop,
+		MinWidth:              config.MinWidth,
+		MinHeight:             config.MinHeight,
+		MaxWidth:              config.MaxWidth,
+		MaxHeight:             config.MaxHeight,
+		X:                     config.X,
+		Y:                     config.Y,
+		CornerRadius:          config.CornerRadius,
+		ShowNativeControls:    config.ShowNativeControls,
+		EnableMinimize:        config.EnableMinimize,
+		EnableMaximize:        config.EnableMaximize,
+	}
+
+	// Keep titleBytes alive
+	runtime.KeepAlive(titleBytes)
+
+	// Register callback with iOS backend (this doesn't block on iOS)
+	result := fnAppRun(uintptr(unsafe.Pointer(&cConfig)), callbackPtr)
+	if result != 0 {
+		log.Printf("[FFI] ERROR: fnAppRun returned %d", result)
+	}
+}
+
+// runIOS handles the iOS-specific startup flow.
+// On iOS, Rust owns the UIApplicationMain event loop. The flow is:
+// 1. Store config for later use by the ready callback
+// 2. Register Go's ready callback with Rust
+// 3. Call centered_ios_main (which calls UIApplicationMain - never returns)
+// 4. When iOS app is ready, Rust calls our iosReadyCallback
+// 5. iosReadyCallback calls fnAppRun to register the event handler
+func runIOS(config AppConfig) error {
+	log.Println("[FFI] Running iOS app")
+
+	// Store config for the ready callback to use later
+	iosStoredConfig = &config
+
+	// Create and register the ready callback
+	iosReadyCallbackPtr = purego.NewCallback(iosReadyCallback)
+	fnIosSetReadyCallback(iosReadyCallbackPtr)
+
+	log.Println("[FFI] Calling centered_ios_main")
+
+	// Call iOS main - this calls UIApplicationMain and never returns
+	// The argc/argv are not used by our iOS implementation
+	result := fnIosMain(0, 0)
+	if result != 0 {
+		return &AppError{Code: int(result)}
+	}
+
+	return nil
 }
 
 // ============================================================================
@@ -904,6 +1019,12 @@ func Run(config AppConfig, handler EventHandler) error {
 		globalMutex.Unlock()
 	}()
 
+	// iOS has a different startup flow
+	if runtime.GOOS == "ios" {
+		return runIOS(config)
+	}
+
+	// Desktop path (macOS, Windows, Linux) - uses winit
 	// Create callback
 	callbackPtr = purego.NewCallback(appCallback)
 

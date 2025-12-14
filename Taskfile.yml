@@ -114,6 +114,30 @@ tasks:
       - task: ios:build
       - task: ios:build:sim
 
+  ios:framework:
+    desc: Build iOS framework with gomobile (rebuilds Go code for iOS)
+    dir: examples/ios_demo
+    cmds:
+      - echo "Building iOS framework with gomobile..."
+      - PATH="$HOME/go/bin:$PATH" gomobile bind -target iossimulator -o CenteredDemo.xcframework .
+      - echo "Framework built at examples/ios_demo/CenteredDemo.xcframework"
+
+  ios:clean:
+    desc: Clean Xcode derived data for iOS demo
+    vars:
+      DERIVED_DATA: '{{.HOME}}/Library/Developer/Xcode/DerivedData'
+    cmds:
+      - echo "Cleaning Xcode derived data..."
+      - rm -rf {{.DERIVED_DATA}}/CenteredDemo* {{.DERIVED_DATA}}/CenteredDemoApp*
+      - echo "Done"
+
+  ios:rebuild:
+    desc: Full rebuild of iOS demo (framework + clean Xcode cache)
+    cmds:
+      - task: ios:framework
+      - task: ios:clean
+      - echo "iOS demo rebuilt. Open Xcode and run the project."
+
   ios:run:
     desc: Build, deploy and run iOS demo on simulator
     vars:
