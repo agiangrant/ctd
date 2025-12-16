@@ -2224,6 +2224,10 @@ func (w *Widget) setFocused(focused bool) {
 	w.mu.Lock()
 	changed := w.focused != focused
 	w.focused = focused
+	// For text fields, reset cursor blink on focus
+	if focused && (w.kind == KindTextField || w.kind == KindTextArea) && w.textBuffer != nil {
+		w.textBuffer.ResetBlink()
+	}
 	w.mu.Unlock()
 	if changed {
 		w.updateStyleState()

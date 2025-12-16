@@ -2,7 +2,7 @@
 //!
 //! This module provides video decoding, playback, and input functionality using
 //! platform-native APIs for optimal performance:
-//! - macOS: AVFoundation (hardware-accelerated H.264/HEVC/VP9, camera capture)
+//! - macOS/iOS: AVFoundation (hardware-accelerated H.264/HEVC/VP9, camera capture)
 //! - Linux: GStreamer (planned)
 //! - Windows: Media Foundation (planned)
 //!
@@ -15,9 +15,10 @@ pub mod decoder;
 pub mod player;
 pub mod input;
 
-#[cfg(target_os = "macos")]
+// macOS and iOS share AVFoundation for video
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod macos;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod macos_input;
 
 use std::error::Error;

@@ -11,12 +11,16 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyClass, AnyObject, ProtocolObject};
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+use std::ffi::CStr;
 use objc2_foundation::{
-    CGFloat, CGPoint, CGRect, CGSize, MainThreadMarker, NSObject, NSObjectProtocol, NSSet,
-    NSString,
+    CGFloat, CGRect, CGSize, MainThreadMarker, NSDictionary, NSNotification,
+    NSNotificationCenter, NSNotificationName, NSNumber, NSObject, NSObjectProtocol, NSSet,
+    NSString, NSValue,
 };
+use block2::RcBlock;
+use std::ptr::NonNull;
 use objc2_ui_kit::{
     UIApplication, UIApplicationDelegate, UIEvent, UIInterfaceOrientationMask, UIRectEdge,
     UIResponder, UIScreen, UITouch, UITouchPhase, UIView, UIViewController, UIWindow,
@@ -28,7 +32,7 @@ use super::wgpu_backend::{SurfaceConfig, WgpuBackend};
 // Thread-local state for iOS (everything runs on main thread)
 thread_local! {
     static IOS_CALLBACK: RefCell<Option<Box<dyn FnMut(PlatformEvent) -> EventResponse>>> = RefCell::new(None);
-    static IOS_BACKEND: RefCell<Option<WgpuBackend>> = RefCell::new(None);
+    // NOTE: Backend is now stored in the global BACKEND in ffi.rs to share with video/audio/image loading
     static IOS_VIEW: RefCell<Option<Retained<MetalView>>> = RefCell::new(None);
     static IOS_WINDOW: RefCell<Option<Retained<UIWindow>>> = RefCell::new(None);
     static IOS_DISPLAY_LINK: RefCell<Option<Retained<AnyObject>>> = RefCell::new(None);
@@ -36,6 +40,9 @@ thread_local! {
     static SAFE_AREA: RefCell<SafeAreaInsets> = RefCell::new(SafeAreaInsets::default());
     static SCALE_FACTOR: RefCell<f64> = RefCell::new(1.0);
     static APP_READY: RefCell<bool> = RefCell::new(false);
+    // Keyboard notification observers (must be kept alive)
+    static KEYBOARD_SHOW_OBSERVER: RefCell<Option<Retained<NSObject>>> = RefCell::new(None);
+    static KEYBOARD_HIDE_OBSERVER: RefCell<Option<Retained<NSObject>>> = RefCell::new(None);
 }
 
 // C callback type for Go's ready handler
@@ -64,12 +71,26 @@ pub fn register_callback(callback: Box<dyn FnMut(PlatformEvent) -> EventResponse
 static REQUEST_EXIT: AtomicBool = AtomicBool::new(false);
 
 /// Send an event to the callback and handle the response
+/// Uses try_borrow_mut to handle re-entrant calls safely (e.g., when callback triggers another event)
 fn send_event(event: PlatformEvent) -> EventResponse {
     IOS_CALLBACK.with(|cb| {
-        if let Some(ref mut callback) = *cb.borrow_mut() {
-            callback(event)
-        } else {
-            EventResponse::default()
+        // Use try_borrow_mut to handle re-entrant calls
+        // If the callback is already borrowed (e.g., we're inside a callback that triggered another event),
+        // return a default response instead of panicking
+        match cb.try_borrow_mut() {
+            Ok(mut guard) => {
+                if let Some(ref mut callback) = *guard {
+                    callback(event)
+                } else {
+                    EventResponse::default()
+                }
+            }
+            Err(_) => {
+                // Re-entrant call - callback is already borrowed
+                // This can happen when the callback does something that triggers another event
+                // (e.g., camera permission request, video input operations, etc.)
+                EventResponse::default()
+            }
         }
     })
 }
@@ -128,7 +149,6 @@ declare_class!(
         // CALayerDelegate method - called when layer needs to display
         #[method(displayLayer:)]
         fn display_layer(&self, _layer: *mut AnyObject) {
-            println!("[MetalView] displayLayer called");
 
             // Send RedrawRequested event to Go
             let response = send_event(PlatformEvent::RedrawRequested);
@@ -137,15 +157,18 @@ declare_class!(
             // The commands come back through the callback mechanism
             // For now, just trigger a redraw cycle
 
-            // Render using wgpu backend
-            IOS_BACKEND.with(|backend| {
-                if let Some(ref mut b) = *backend.borrow_mut() {
-                    // The render commands should have been collected by send_event
-                    // We need to execute them here
-                    // For now, just present an empty frame
-                    println!("[MetalView] Rendering frame via wgpu backend");
+            // Render using wgpu backend (use global backend from ffi.rs)
+            {
+                let backend_lock = crate::ffi::get_backend();
+                if let Ok(mut guard) = backend_lock.lock() {
+                    if let Some(ref mut _b) = *guard {
+                        // The render commands should have been collected by send_event
+                        // We need to execute them here
+                        // For now, just present an empty frame
+                        // println!("[MetalView] Rendering frame via wgpu backend");
+                    }
                 }
-            });
+            }
         }
 
         #[method(layoutSubviews)]
@@ -154,9 +177,6 @@ declare_class!(
 
             let bounds = self.bounds();
             let scale = self.contentScaleFactor();
-
-            println!("[MetalView] layoutSubviews: {}x{} @ {}x",
-                bounds.size.width, bounds.size.height, scale);
 
             // Update CAMetalLayer drawable size
             let layer: *mut AnyObject = unsafe { msg_send![self, layer] };
@@ -169,15 +189,18 @@ declare_class!(
                 let _: () = unsafe { msg_send![layer, setContentsScale: scale] };
             }
 
-            // Resize wgpu backend
+            // Resize wgpu backend (use global backend from ffi.rs)
             let physical_width = (bounds.size.width * scale) as u32;
             let physical_height = (bounds.size.height * scale) as u32;
 
-            IOS_BACKEND.with(|backend| {
-                if let Some(ref mut b) = *backend.borrow_mut() {
-                    let _ = b.resize(physical_width, physical_height, scale);
+            {
+                let backend_lock = crate::ffi::get_backend();
+                if let Ok(mut guard) = backend_lock.lock() {
+                    if let Some(ref mut b) = *guard {
+                        let _ = b.resize(physical_width, physical_height, scale);
+                    }
                 }
-            });
+            }
 
             SCALE_FACTOR.with(|sf| *sf.borrow_mut() = scale);
 
@@ -265,11 +288,121 @@ declare_class!(
             true
         }
 
+        // UIKeyInput protocol methods for keyboard input
+        #[method(hasText)]
+        fn has_text(&self) -> bool {
+            // Return true to indicate we can receive text
+            // This is required for UIKeyInput compliance
+            true
+        }
+
+        #[method(insertText:)]
+        fn insert_text(&self, text: &objc2_foundation::NSString) {
+            // Convert NSString to Rust String
+            let text_str = text.to_string();
+
+            // Send TextInput event to Go
+            send_event(PlatformEvent::TextInput { text: text_str });
+        }
+
+        #[method(deleteBackward)]
+        fn delete_backward(&self) {
+            // Send backspace as a KeyPressed event
+            // Use FFI keycode 56 for backspace (not macOS keycode 0x33)
+            send_event(PlatformEvent::KeyPressed {
+                keycode: 56, // FFI KeyBackspace
+                modifiers: 0,
+            });
+        }
+
         // CADisplayLink target method
         #[method(displayLinkFired:)]
         fn display_link_fired(&self, _display_link: *mut AnyObject) {
             // Send RedrawRequested event to Go callback
             let _response = send_event(PlatformEvent::RedrawRequested);
+        }
+
+        // Hardware keyboard support - pressesBegan
+        #[method(pressesBegan:withEvent:)]
+        fn presses_began(&self, presses: &NSSet<AnyObject>, _event: Option<&UIEvent>) {
+            for press in presses.iter() {
+                unsafe {
+                    // Get the key from UIPress
+                    let key: *mut AnyObject = msg_send![&*press, key];
+                    if key.is_null() {
+                        continue;
+                    }
+
+                    // Get keyCode (UIKeyboardHIDUsage)
+                    let key_code: i64 = msg_send![key, keyCode];
+
+                    // Get characters for text input
+                    let characters: *mut AnyObject = msg_send![key, characters];
+                    if !characters.is_null() {
+                        let chars_str: *const std::ffi::c_char = msg_send![characters, UTF8String];
+                        if !chars_str.is_null() {
+                            let text = std::ffi::CStr::from_ptr(chars_str).to_string_lossy().to_string();
+                            if !text.is_empty() && !text.chars().all(|c| c.is_control()) {
+                                send_event(PlatformEvent::TextInput { text });
+                            }
+                        }
+                    }
+
+                    // Convert HID key code to FFI keycode
+                    let ffi_keycode = hid_to_ffi_keycode(key_code);
+                    if ffi_keycode != 0 {
+                        send_event(PlatformEvent::KeyPressed {
+                            keycode: ffi_keycode,
+                            modifiers: 0,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Hardware keyboard support - pressesEnded
+        #[method(pressesEnded:withEvent:)]
+        fn presses_ended(&self, presses: &NSSet<AnyObject>, _event: Option<&UIEvent>) {
+            for press in presses.iter() {
+                unsafe {
+                    let key: *mut AnyObject = msg_send![&*press, key];
+                    if key.is_null() {
+                        continue;
+                    }
+
+                    let key_code: i64 = msg_send![key, keyCode];
+                    let ffi_keycode = hid_to_ffi_keycode(key_code);
+                    if ffi_keycode != 0 {
+                        send_event(PlatformEvent::KeyReleased {
+                            keycode: ffi_keycode,
+                            modifiers: 0,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Hardware keyboard support - pressesCancelled
+        #[method(pressesCancelled:withEvent:)]
+        fn presses_cancelled(&self, presses: &NSSet<AnyObject>, _event: Option<&UIEvent>) {
+            // Same as pressesEnded - send KeyReleased for each key
+            for press in presses.iter() {
+                unsafe {
+                    let key: *mut AnyObject = msg_send![&*press, key];
+                    if key.is_null() {
+                        continue;
+                    }
+
+                    let key_code: i64 = msg_send![key, keyCode];
+                    let ffi_keycode = hid_to_ffi_keycode(key_code);
+                    if ffi_keycode != 0 {
+                        send_event(PlatformEvent::KeyReleased {
+                            keycode: ffi_keycode,
+                            modifiers: 0,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -278,6 +411,29 @@ declare_class!(
 
 impl MetalView {
     fn new(mtm: MainThreadMarker, frame: CGRect) -> Retained<Self> {
+        // Add UIKeyInput protocol conformance to the class at runtime
+        // This is needed so iOS knows our view can receive keyboard input
+        unsafe {
+            extern "C" {
+                fn objc_getProtocol(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+                fn class_addProtocol(cls: *const std::ffi::c_void, protocol: *const std::ffi::c_void) -> bool;
+            }
+
+            let class_ptr = Self::class() as *const _ as *const std::ffi::c_void;
+            let protocol_name = b"UIKeyInput\0";
+            let protocol = objc_getProtocol(protocol_name.as_ptr() as *const std::ffi::c_char);
+            if !protocol.is_null() {
+                class_addProtocol(class_ptr, protocol);
+            }
+
+            // Also add UITextInputTraits which is required for keyboard customization
+            let traits_name = b"UITextInputTraits\0";
+            let traits_protocol = objc_getProtocol(traits_name.as_ptr() as *const std::ffi::c_char);
+            if !traits_protocol.is_null() {
+                class_addProtocol(class_ptr, traits_protocol);
+            }
+        }
+
         let this = mtm.alloc().set_ivars(());
         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
 
@@ -344,12 +500,8 @@ declare_class!(
     unsafe impl DisplayLinkHandler {
         #[method(render:)]
         fn render(&self, _display_link: *mut AnyObject) {
-            println!("[DisplayLink] render: called");
-
             // Send RedrawRequested event directly to Go callback
-            let response = send_event(PlatformEvent::RedrawRequested);
-
-            println!("[DisplayLink] response.request_redraw = {}", response.request_redraw);
+            send_event(PlatformEvent::RedrawRequested);
         }
     }
 
@@ -365,13 +517,9 @@ impl DisplayLinkHandler {
 
 /// Start the display link for continuous rendering
 fn start_display_link(_mtm: MainThreadMarker) {
-    println!("[iOS] Starting CADisplayLink...");
-
     // Use the MetalView as the target (it's already stored and retained)
     IOS_VIEW.with(|v| {
         if let Some(ref view) = *v.borrow() {
-            println!("[iOS] Using MetalView as display link target");
-
             // Create CADisplayLink targeting MetalView's displayLinkFired: method
             let display_link: Retained<AnyObject> = unsafe {
                 msg_send_id![
@@ -380,28 +528,20 @@ fn start_display_link(_mtm: MainThreadMarker) {
                     selector: sel!(displayLinkFired:)
                 ]
             };
-            println!("[iOS] CADisplayLink created");
 
             // Add to main run loop - use currentRunLoop and common modes
             let current_run_loop: *mut AnyObject = unsafe { msg_send![class!(NSRunLoop), currentRunLoop] };
-            println!("[iOS] Got current run loop: {:?}", current_run_loop);
 
             // NSRunLoopCommonModes
             extern "C" {
                 static NSRunLoopCommonModes: *const AnyObject;
             }
             let common_modes: *const AnyObject = unsafe { NSRunLoopCommonModes };
-            println!("[iOS] Common modes: {:?}", common_modes);
 
             let _: () = unsafe { msg_send![&*display_link, addToRunLoop: current_run_loop, forMode: common_modes] };
-            println!("[iOS] CADisplayLink added to run loop");
 
             // Store to keep alive
             IOS_DISPLAY_LINK.with(|dl| *dl.borrow_mut() = Some(display_link));
-
-            println!("[iOS] CADisplayLink started");
-        } else {
-            println!("[iOS] ERROR: MetalView not found for display link");
         }
     });
 }
@@ -451,8 +591,6 @@ declare_class!(
             size: CGSize,
             coordinator: *mut AnyObject,
         ) {
-            println!("[VC] viewWillTransitionToSize: {}x{}", size.width, size.height);
-
             // Call super - UIKit will call layoutSubviews automatically
             let _: () = unsafe {
                 msg_send![super(self), viewWillTransitionToSize: size, withTransitionCoordinator: coordinator]
@@ -495,17 +633,12 @@ declare_class!(
             _application: &UIApplication,
             _options: *mut AnyObject,
         ) -> bool {
-            println!("[AppDelegate] didFinishLaunchingWithOptions");
-
             let mtm = MainThreadMarker::new().unwrap();
 
             // Get screen bounds
             let screen = UIScreen::mainScreen(mtm);
             let screen_bounds = screen.bounds();
             let scale = screen.scale();
-
-            println!("[AppDelegate] Screen: {}x{} @ {}x",
-                screen_bounds.size.width, screen_bounds.size.height, scale);
 
             // Create window
             let window: Retained<UIWindow> = unsafe {
@@ -532,7 +665,6 @@ declare_class!(
             update_safe_area_insets(&metal_view);
 
             // Initialize wgpu backend with the metal view
-            println!("[AppDelegate] Initializing wgpu backend");
             let physical_width = (screen_bounds.size.width * scale) as u32;
             let physical_height = (screen_bounds.size.height * scale) as u32;
 
@@ -553,11 +685,11 @@ declare_class!(
 
             match pollster::block_on(backend.init_with_window(&native_handle, config)) {
                 Ok(()) => {
-                    println!("[AppDelegate] wgpu backend initialized successfully");
-                    IOS_BACKEND.with(|b| *b.borrow_mut() = Some(backend));
+                    // Store in global backend (shared with FFI for video/audio/image loading)
+                    crate::ffi::set_backend(backend);
                 }
                 Err(e) => {
-                    println!("[AppDelegate] ERROR: Failed to initialize wgpu backend: {}", e);
+                    eprintln!("[iOS] Failed to initialize wgpu backend: {}", e);
                 }
             }
 
@@ -568,10 +700,7 @@ declare_class!(
             // This allows Go to set up its event handler
             unsafe {
                 if let Some(callback) = GO_READY_CALLBACK {
-                    println!("[AppDelegate] Calling Go ready callback");
                     callback();
-                } else {
-                    println!("[AppDelegate] No Go ready callback registered");
                 }
             }
 
@@ -589,12 +718,14 @@ declare_class!(
             // Start the display link for continuous rendering
             start_display_link(mtm);
 
+            // Set up keyboard show/hide observers for keyboard avoidance
+            setup_keyboard_observers();
+
             true
         }
 
         #[method(applicationDidBecomeActive:)]
         fn did_become_active(&self, _application: &UIApplication) {
-            println!("[AppDelegate] applicationDidBecomeActive");
             let response = send_event(PlatformEvent::Resumed);
             if response.request_redraw {
                 IOS_VIEW.with(|v| {
@@ -607,13 +738,11 @@ declare_class!(
 
         #[method(applicationWillResignActive:)]
         fn will_resign_active(&self, _application: &UIApplication) {
-            println!("[AppDelegate] applicationWillResignActive");
             send_event(PlatformEvent::Suspended);
         }
 
         #[method(applicationDidReceiveMemoryWarning:)]
         fn did_receive_memory_warning(&self, _application: &UIApplication) {
-            println!("[AppDelegate] applicationDidReceiveMemoryWarning");
             send_event(PlatformEvent::MemoryWarning);
         }
     }
@@ -639,9 +768,112 @@ fn update_safe_area_insets(view: &MetalView) {
             right: insets.right,
         };
     });
+}
 
-    println!("[iOS] Safe area insets: top={}, left={}, bottom={}, right={}",
-        insets.top, insets.left, insets.bottom, insets.right);
+/// Set up observers for keyboard show/hide notifications.
+/// This allows the app to know when the keyboard appears and its height,
+/// so it can scroll content to keep text inputs visible.
+fn setup_keyboard_observers() {
+    let center = unsafe { NSNotificationCenter::defaultCenter() };
+
+    // UIKeyboardWillShowNotification
+    let show_name: &NSNotificationName = unsafe {
+        &*NSString::from_str("UIKeyboardWillShowNotification")
+    };
+
+    // UIKeyboardWillHideNotification
+    let hide_name: &NSNotificationName = unsafe {
+        &*NSString::from_str("UIKeyboardWillHideNotification")
+    };
+
+    // Handler for keyboard will show
+    let show_block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+        let notification = unsafe { notification.as_ref() };
+        let (height, duration) = extract_keyboard_info(notification);
+
+        let response = send_event(PlatformEvent::KeyboardFrameChanged {
+            height,
+            animation_duration: duration,
+        });
+
+        if response.request_redraw {
+            IOS_VIEW.with(|v| {
+                if let Some(ref view) = *v.borrow() {
+                    view.set_needs_display();
+                }
+            });
+        }
+    });
+
+    // Handler for keyboard will hide
+    let hide_block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+        let notification = unsafe { notification.as_ref() };
+        let (_, duration) = extract_keyboard_info(notification);
+
+        let response = send_event(PlatformEvent::KeyboardFrameChanged {
+            height: 0.0,
+            animation_duration: duration,
+        });
+
+        if response.request_redraw {
+            IOS_VIEW.with(|v| {
+                if let Some(ref view) = *v.borrow() {
+                    view.set_needs_display();
+                }
+            });
+        }
+    });
+
+    // Register observers and store them to keep alive
+    let show_observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(show_name),
+            None,
+            None,
+            &show_block,
+        )
+    };
+
+    let hide_observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(hide_name),
+            None,
+            None,
+            &hide_block,
+        )
+    };
+
+    // Store observers in thread-local state to keep them alive
+    KEYBOARD_SHOW_OBSERVER.with(|o| *o.borrow_mut() = Some(show_observer));
+    KEYBOARD_HIDE_OBSERVER.with(|o| *o.borrow_mut() = Some(hide_observer));
+}
+
+/// Extract keyboard height and animation duration from notification userInfo.
+fn extract_keyboard_info(notification: &NSNotification) -> (f64, f64) {
+    let mut height = 0.0f64;
+    let mut duration = 0.25f64; // Default animation duration
+
+    unsafe {
+        if let Some(user_info) = notification.userInfo() {
+            // Get keyboard frame from UIKeyboardFrameEndUserInfoKey
+            let frame_key = NSString::from_str("UIKeyboardFrameEndUserInfoKey");
+            if let Some(frame_value) = user_info.objectForKey(&*frame_key) {
+                // The value is an NSValue containing a CGRect
+                let frame_value_ptr = &*frame_value as *const AnyObject as *const NSValue;
+                let frame: CGRect = msg_send![frame_value_ptr, CGRectValue];
+                height = frame.size.height;
+            }
+
+            // Get animation duration from UIKeyboardAnimationDurationUserInfoKey
+            let duration_key = NSString::from_str("UIKeyboardAnimationDurationUserInfoKey");
+            if let Some(duration_value) = user_info.objectForKey(&*duration_key) {
+                let duration_value_ptr = &*duration_value as *const AnyObject as *const NSNumber;
+                duration = msg_send![duration_value_ptr, doubleValue];
+            }
+        }
+    }
+
+    (height, duration)
 }
 
 // ============================================================================
@@ -652,8 +884,7 @@ fn update_safe_area_insets(view: &MetalView) {
 /// This must be called before UIApplicationMain so the class can be found by name.
 pub fn register_app_delegate_class() {
     // Accessing the class triggers registration with the ObjC runtime
-    let _cls = AppDelegate::class();
-    println!("[iOS] AppDelegate class registered: {:?}", _cls);
+    let _ = AppDelegate::class();
 }
 
 // ============================================================================
@@ -716,12 +947,11 @@ impl super::backend::PlatformBackend for IosBackend {
 
 /// Initialize the wgpu backend with the metal view
 /// Call this after the view is created
-pub fn init_wgpu_backend(config: SurfaceConfig) -> Result<(), Box<dyn Error>> {
+pub fn init_wgpu_backend(_config: SurfaceConfig) -> Result<(), Box<dyn Error>> {
     let backend = WgpuBackend::new();
 
-    IOS_BACKEND.with(|b| {
-        *b.borrow_mut() = Some(backend);
-    });
+    // Store in global backend (shared with FFI)
+    crate::ffi::set_backend(backend);
 
     // TODO: Initialize surface with metal layer from IOS_VIEW
     // This requires adding init_with_metal_layer to WgpuBackend
@@ -746,11 +976,101 @@ pub fn request_redraw() {
 /// Render a frame using the iOS backend
 /// Called from FFI when Go submits render commands on iOS
 pub fn render_frame(commands: &[crate::render::RenderCommand]) -> Result<(), Box<dyn Error>> {
-    IOS_BACKEND.with(|backend| {
-        if let Some(ref mut b) = *backend.borrow_mut() {
-            b.render_frame(commands)
-        } else {
-            Err("iOS backend not initialized".into())
+    let backend_lock = crate::ffi::get_backend();
+    let mut guard = backend_lock.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(ref mut b) = *guard {
+        b.render_frame(commands)
+    } else {
+        Err("iOS backend not initialized".into())
+    }
+}
+
+// ============================================================================
+// Keyboard Functions
+// ============================================================================
+
+// Thread-local to track keyboard visibility
+thread_local! {
+    static KEYBOARD_VISIBLE: RefCell<bool> = RefCell::new(false);
+}
+
+/// Show the software keyboard
+pub fn show_keyboard() {
+    IOS_VIEW.with(|v| {
+        if let Some(ref view) = *v.borrow() {
+            unsafe {
+                let result: bool = msg_send![&**view, becomeFirstResponder];
+                if result {
+                    KEYBOARD_VISIBLE.with(|kv| *kv.borrow_mut() = true);
+                }
+            }
         }
-    })
+    });
+}
+
+/// Hide the software keyboard
+pub fn hide_keyboard() {
+    IOS_VIEW.with(|v| {
+        if let Some(ref view) = *v.borrow() {
+            unsafe {
+                let _: bool = msg_send![&**view, resignFirstResponder];
+                KEYBOARD_VISIBLE.with(|kv| *kv.borrow_mut() = false);
+            }
+        }
+    });
+}
+
+/// Check if keyboard is visible
+pub fn is_keyboard_visible() -> bool {
+    KEYBOARD_VISIBLE.with(|kv| *kv.borrow())
+}
+
+/// Convert USB HID keyboard usage codes to FFI keycodes
+/// See: https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf (page 53)
+fn hid_to_ffi_keycode(hid_code: i64) -> u32 {
+    match hid_code {
+        // Letters A-Z (HID 0x04-0x1D -> FFI 0-25)
+        0x04..=0x1D => (hid_code - 0x04) as u32,
+
+        // Numbers 1-9, 0 (HID 0x1E-0x27 -> FFI 26-35)
+        0x1E..=0x26 => (hid_code - 0x1E + 26) as u32, // 1-9
+        0x27 => 35, // 0
+
+        // Function keys F1-F12 (HID 0x3A-0x45 -> FFI 36-47)
+        0x3A..=0x45 => (hid_code - 0x3A + 36) as u32,
+
+        // Navigation
+        0x52 => 48, // Up Arrow
+        0x51 => 49, // Down Arrow
+        0x50 => 50, // Left Arrow
+        0x4F => 51, // Right Arrow
+        0x4A => 52, // Home
+        0x4D => 53, // End
+        0x4B => 54, // Page Up
+        0x4E => 55, // Page Down
+
+        // Editing
+        0x2A => 56, // Backspace/Delete
+        0x4C => 57, // Delete Forward
+        0x49 => 58, // Insert
+        0x28 => 59, // Return/Enter
+        0x2B => 60, // Tab
+        0x29 => 61, // Escape
+        0x2C => 62, // Space
+
+        // Punctuation
+        0x2D => 63, // Minus
+        0x2E => 64, // Equal
+        0x2F => 65, // Left Bracket
+        0x30 => 66, // Right Bracket
+        0x31 => 67, // Backslash
+        0x33 => 68, // Semicolon
+        0x34 => 69, // Quote
+        0x35 => 70, // Grave/Backtick
+        0x36 => 71, // Comma
+        0x37 => 72, // Period
+        0x38 => 73, // Slash
+
+        _ => 0, // Unknown key
+    }
 }

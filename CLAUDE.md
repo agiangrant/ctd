@@ -203,7 +203,8 @@ The retained mode system provides a declarative widget API with automatic layout
 - `retained/loop.go` - Event loop integration, frame rendering
 - `retained/text_input.go` - TextField and TextArea implementations
 - `retained/tailwind.go` - Style property extraction from Tailwind classes
-- `retained/animation.go` - Animation system (planned)
+- `retained/animation.go` - Animation system with easing functions and AnimationRegistry
+- `retained/scroll.go` - Scroll animation utilities for keyboard avoidance and navigation
 
 **Widget Kinds**:
 - Layout: `VStack`, `HStack`, `ZStack`, `Container`, `Spacer`
@@ -247,10 +248,11 @@ The measurement function is swappable via `SetMeasureTextWidthFunc()` to support
 
 **Event Dispatch**:
 - Hit testing: Finds widget at mouse coordinates
-- Focus management: Tab navigation, click-to-focus
+- Focus management: Tab navigation, click-to-focus (on mouse down for iOS keyboard compatibility)
 - Hover tracking: Mouse enter/leave detection
 - Keyboard routing: Key events to focused widget
-- Drag detection: For text selection in TextArea
+- Drag detection: For text selection in TextArea, scroll gestures blur focused inputs
+- Momentum scrolling: Inertial scroll after drag release
 
 **TextField/TextArea Features**:
 - ✅ Cursor positioning (click, arrow keys)
@@ -265,6 +267,22 @@ The measurement function is swappable via `SetMeasureTextWidthFunc()` to support
 - ✅ Multi-line with scrolling (TextArea)
 - ✅ Word wrap with ellipsis
 - ✅ Double/triple-click selection
+
+**iOS Software Keyboard** (`engine/src/platform/ios.rs`):
+- ✅ UIKeyInput protocol implementation for software keyboard input
+- ✅ Hardware keyboard support via UIPress events
+- ✅ Keyboard show/hide notifications (UIKeyboardWillShowNotification)
+- ✅ Keyboard frame tracking for avoidance
+- ✅ Focus triggers keyboard on touch down (required for iOS responder chain)
+- ✅ Drag-to-scroll automatically blurs focused inputs and hides keyboard
+
+**Scroll Animation Utilities** (`retained/scroll.go`):
+- `ScrollToWidget()` - Animate scroll to make a widget visible
+- `ScrollToWidgetWithKeyboard()` - Same but accounts for keyboard height
+- `ScrollToY()` - Animate to a specific scroll position (via AnimationBuilder)
+- Configurable duration, easing, and padding
+- Integrates with AnimationRegistry for 60fps mode
+- Reusable for keyboard avoidance, anchor navigation, programmatic scrolling
 
 **Usage Example**:
 ```go
@@ -366,9 +384,20 @@ Immediate mode uses `CommandBuffer` with `Vec<RenderCommand>`:
 
 ### Platform Backends (`engine/src/platform/`)
 
-**Status**: wgpu backend fully implemented for macOS. Other platforms scaffolded.
+**Status**: wgpu backend fully implemented for macOS and iOS. Other platforms scaffolded.
 
 The primary rendering backend uses **wgpu** (`platform/wgpu_backend.rs`) which provides cross-platform GPU access via Metal (macOS/iOS), Vulkan (Linux/Android), and D3D12 (Windows).
+
+**iOS Platform** (`platform/ios.rs`):
+- Direct UIKit integration bypassing winit for proper iOS lifecycle
+- CAMetalLayer-backed UIView with wgpu rendering
+- Multi-touch support with gesture detection (tap vs drag)
+- Software keyboard via UIKeyInput protocol conformance
+- Hardware keyboard via UIPress event handling
+- Keyboard frame notifications for avoidance animations
+- Safe area insets support
+- Device orientation handling
+- App lifecycle events (suspend/resume)
 
 **wgpu Backend Features** (fully implemented):
 - ✅ Rectangles with rounded corners (per-corner radii)

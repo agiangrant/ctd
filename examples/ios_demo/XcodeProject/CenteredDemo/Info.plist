@@ -36,5 +36,11 @@
 	<false/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs camera access for video capture testing</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access for audio recording testing</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs photo library access to save media</string>
 </dict>
 </plist>

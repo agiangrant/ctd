@@ -69,6 +69,7 @@ objc2-app-kit = { version = "0.2", features = [
 
 # iOS-specific objc2 bindings
 [target.'cfg(target_os = "ios")'.dependencies]
+block2 = "0.5"
 objc2-ui-kit = { version = "0.2", features = [
     "UIApplication",
     "UIDevice",

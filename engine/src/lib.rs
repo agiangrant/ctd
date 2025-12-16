@@ -4,8 +4,8 @@
 //! for the Centered UI framework. It is designed to be platform-agnostic and
 //! supports both immediate mode and retained mode rendering.
 
-// Import objc macros for macOS FFI
-#[cfg(target_os = "macos")]
+// Import objc macros for macOS/iOS FFI (audio/video use AVFoundation on both platforms)
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[macro_use]
 extern crate objc;
 

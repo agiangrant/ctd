@@ -372,6 +372,12 @@ type Loop struct {
 	colorScheme ColorScheme
 	darkMode    bool // Computed from colorScheme + OS preference
 
+	// Scroll settings
+	naturalScrolling bool // Cached from system preferences
+
+	// Keyboard avoidance (iOS)
+	keyboardHeight float32 // Height of on-screen keyboard in logical points (0 when hidden)
+
 	// Event handlers
 	onFrame  func(*Frame)
 	onEvent  func(ffi.Event) bool // Return true to consume event
@@ -435,14 +441,15 @@ func NewLoop(config LoopConfig) *Loop {
 	}
 
 	loop := &Loop{
-		tree:            tree,
-		config:          config,
-		animations:      NewAnimationRegistry(),
-		events:          events,
-		targetFrameTime: time.Second / time.Duration(config.TargetFPS),
-		breakpoints:     breakpoints,
-		colorScheme:     config.ColorScheme,
-		darkMode:        darkMode,
+		tree:             tree,
+		config:           config,
+		animations:       NewAnimationRegistry(),
+		events:           events,
+		targetFrameTime:  time.Second / time.Duration(config.TargetFPS),
+		breakpoints:      breakpoints,
+		colorScheme:      config.ColorScheme,
+		darkMode:         darkMode,
+		naturalScrolling: ffi.GetNaturalScrolling(),
 	}
 
 	// Set dark mode provider so widgets can check dark mode state
@@ -679,6 +686,14 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 
 	case ffi.EventMouseWheel:
 		deltaX, deltaY := event.ScrollDelta()
+		// On desktop, macOS/Windows provide scroll deltas with natural scrolling direction
+		// when the system preference is enabled. When natural scrolling is disabled (traditional),
+		// the delta direction is inverted. Our scroll logic expects natural scrolling direction,
+		// so we negate the delta when traditional scrolling is in use.
+		if runtime.GOOS != "ios" && !l.naturalScrolling {
+			deltaX = -deltaX
+			deltaY = -deltaY
+		}
 		l.events.DispatchMouseWheel(l.mouseX, l.mouseY, float32(deltaX), float32(deltaY), 0)
 		// Only redraw if event handlers modified widget state (e.g., scroll position)
 		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
@@ -706,9 +721,67 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		l.events.DispatchKeyPress(char, mods)
 		// Only redraw if event handlers modified widget state
 		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+
+	case ffi.EventKeyboardFrameChanged:
+		keyboardHeight := float32(event.Data1)
+		animationDuration := time.Duration(event.Data2 * float64(time.Second))
+		l.keyboardHeight = keyboardHeight
+		// Scroll to keep focused input visible when keyboard appears
+		if keyboardHeight > 0 {
+			l.scrollToKeepFocusedInputVisible(animationDuration)
+		}
+		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
 	}
 
 	return ffi.FrameResponse{}
+}
+
+// scrollToKeepFocusedInputVisible scrolls the nearest scrollable parent to ensure
+// the focused text input is visible above the keyboard.
+func (l *Loop) scrollToKeepFocusedInputVisible(animationDuration time.Duration) {
+	// Get focused widget from event dispatcher
+	focused := l.events.FocusedWidget()
+	if focused == nil {
+		return
+	}
+
+	// Check if it's a text input widget
+	kind := focused.Kind()
+	if kind != KindTextField && kind != KindTextArea {
+		return
+	}
+
+	// Find the nearest scrollable parent
+	scrollParent := findScrollableParent(focused)
+	if scrollParent == nil {
+		return
+	}
+
+	// Use the scroll animation utility with keyboard height
+	cfg := ScrollToConfig{
+		Duration: animationDuration,
+		Easing:   EaseOutCubic,
+		Padding:  20,
+	}
+
+	ScrollToWidgetWithKeyboard(scrollParent, focused, l.animations, cfg, l.keyboardHeight)
+}
+
+// findScrollableParent walks up the widget tree to find the nearest scrollable container.
+func findScrollableParent(w *Widget) *Widget {
+	parent := w.Parent()
+	for parent != nil {
+		parent.mu.RLock()
+		isScrollable := parent.overflowY == "scroll" || parent.overflowY == "auto" ||
+			(parent.kind == KindScrollView && parent.scrollEnabled)
+		parent.mu.RUnlock()
+
+		if isScrollable {
+			return parent
+		}
+		parent = parent.Parent()
+	}
+	return nil
 }
 
 // convertMouseButton converts FFI mouse button to our MouseButton type.

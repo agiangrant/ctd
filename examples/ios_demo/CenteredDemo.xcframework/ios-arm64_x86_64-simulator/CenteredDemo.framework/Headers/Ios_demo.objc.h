@@ -32,6 +32,58 @@
 
 // skipped field DemoWidgetRefs.Button3 with unsupported type: *github.com/agiangrant/centered/retained.Widget
 
+// skipped field DemoWidgetRefs.AudioWidget with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.AudioButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.AudioStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.MicWidget with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.MicButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.MicStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.MicLevelText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.VideoWidget with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.VideoButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.VideoStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.CameraWidget with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.CameraButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.CameraStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.ClipboardCopyButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.ClipboardPasteButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.ClipboardStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.HapticLightButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.HapticMediumButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.HapticHeavyButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.HapticSelectionBtn with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.HapticSuccessButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.HapticStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.KeyboardInput with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.KeyboardShowButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.KeyboardHideButton with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
+// skipped field DemoWidgetRefs.KeyboardStatusText with unsupported type: *github.com/agiangrant/centered/retained.Widget
+
 @end
 
 /**

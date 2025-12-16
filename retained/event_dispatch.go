@@ -281,6 +281,11 @@ func (d *EventDispatcher) DispatchMouseMove(screenX, screenY float32, mods Modif
 				d.isDragging = true
 				d.lastTouchX = screenX
 				d.lastTouchY = screenY
+				// Blur focused widget when drag starts (for mobile scroll UX)
+				// This ensures scrolling doesn't leave text inputs focused with keyboard showing
+				if d.focusedWidget != nil {
+					d.setFocus(nil)
+				}
 				return true // Redraw needed
 			}
 			// If scroll didn't happen (content fits), clear scroll target so we don't keep trying
@@ -382,8 +387,10 @@ func (d *EventDispatcher) DispatchMouseDown(screenX, screenY float32, button Mou
 		w.setPressed(true)
 	}
 
-	// Focus the clicked widget if focusable
-	// (For now, all widgets are focusable - can add isFocusable field later)
+	// Focus is set here on mouse down, not on mouse up.
+	// This is required for iOS where the software keyboard will only show
+	// if becomeFirstResponder is called within the touch event handling context.
+	// If the user starts dragging (scroll gesture), we blur the focus in DispatchMouseMove.
 	if target != d.focusedWidget {
 		d.setFocus(target)
 	}
@@ -444,6 +451,9 @@ func (d *EventDispatcher) DispatchMouseUp(screenX, screenY float32, button Mouse
 		d.dispatchToWidget(target, e, chain)
 		e.Release()
 	}
+
+	// Note: Focus is now set on mouse down (for iOS keyboard to work).
+	// If dragging occurred, focus was already blurred in DispatchMouseMove.
 
 	// Check for click (mouse up on same widget as mouse down)
 	if d.pressedWidget != nil {

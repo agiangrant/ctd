@@ -83,6 +83,13 @@ pub enum PlatformEvent {
     Resumed,
     /// Memory warning (mobile)
     MemoryWarning,
+    /// Keyboard visibility changed (mobile)
+    KeyboardFrameChanged {
+        /// Height of keyboard in logical points (0 if hidden)
+        height: f64,
+        /// Animation duration in seconds
+        animation_duration: f64,
+    },
 }
 
 /// Response from application to platform

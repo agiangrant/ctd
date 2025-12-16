@@ -1,7 +1,7 @@
 //! Audio playback and input support
 //!
 //! This module provides audio playback and input functionality using platform-native APIs:
-//! - macOS: AVFoundation / AVAudioEngine (hardware-accelerated, respects system devices)
+//! - macOS/iOS: AVFoundation / AVAudioEngine (hardware-accelerated, respects system devices)
 //! - Linux: PulseAudio or PipeWire (planned)
 //! - Windows: WASAPI (planned)
 //!
@@ -17,9 +17,10 @@
 pub mod player;
 pub mod input;
 
-#[cfg(target_os = "macos")]
+// macOS and iOS share AVFoundation for audio
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod macos;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod macos_input;
 
 use std::error::Error;

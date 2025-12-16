@@ -119,35 +119,11 @@ impl MacOSAudioBackend {
         unsafe {
             let ns_url = Self::create_http_url(url)?;
 
-            // Create NSURLRequest
-            let request: *mut Object = msg_send![class!(NSURLRequest), requestWithURL: ns_url];
+            // Use NSData's dataWithContentsOfURL - synchronous but works on both macOS and iOS
+            let data: *mut Object = msg_send![class!(NSData), dataWithContentsOfURL: ns_url];
 
-            // Use synchronous request (deprecated but works)
-            let mut response: *mut Object = ptr::null_mut();
-            let mut error: *mut Object = ptr::null_mut();
-
-            let data: *mut Object = msg_send![
-                class!(NSURLConnection),
-                sendSynchronousRequest: request
-                returningResponse: &mut response
-                error: &mut error
-            ];
-
-            if data.is_null() || !error.is_null() {
-                if !error.is_null() {
-                    let desc: *mut Object = msg_send![error, localizedDescription];
-                    if !desc.is_null() {
-                        let utf8: *const i8 = msg_send![desc, UTF8String];
-                        if !utf8.is_null() {
-                            let error_str = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
-                            return Err(AudioError::LoadError(format!(
-                                "Download failed: {}",
-                                error_str
-                            )));
-                        }
-                    }
-                }
-                return Err(AudioError::LoadError("Failed to download audio".into()));
+            if data.is_null() {
+                return Err(AudioError::LoadError(format!("Failed to download audio from: {}", url)));
             }
 
             // Get data bytes
@@ -172,8 +148,6 @@ impl MacOSAudioBackend {
                 .map_err(|e| AudioError::LoadError(format!("Failed to create temp file: {}", e)))?;
             file.write_all(data_slice)
                 .map_err(|e| AudioError::LoadError(format!("Failed to write temp file: {}", e)))?;
-
-            eprintln!("[audio] Downloaded {} bytes to {}", length, temp_path_str);
 
             Ok(temp_path_str)
         }

@@ -2,7 +2,6 @@ package retained
 
 import (
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 
@@ -2153,10 +2152,6 @@ func SyncBoundsFromLayout(root *Widget) {
 			Y:      layout.Y,
 			Width:  layout.Width,
 			Height: layout.Height,
-		}
-		if depth == 0 {
-			log.Printf("SyncBoundsFromLayout: root bounds set to (%.1f,%.1f,%.1f,%.1f)",
-				layout.X, layout.Y, layout.Width, layout.Height)
 		}
 		children := acquireWidgetSlice(len(w.children))
 		copy(children, w.children)

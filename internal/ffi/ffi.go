@@ -139,6 +139,17 @@ var (
 	fnClipboardGet func() uintptr
 	fnClipboardSet func(text uintptr)
 
+	// Keyboard functions (iOS)
+	fnKeyboardShow      func()
+	fnKeyboardHide      func()
+	fnKeyboardIsVisible func() int32
+
+	// Haptic feedback functions (iOS)
+	fnHapticFeedback func(style int32)
+
+	// System preferences functions
+	fnGetNaturalScrolling func() int32
+
 	// File dialog functions (Rust implementation)
 	fnFileDialogOpen       func(title uintptr, directory uintptr, filters uintptr, multiple int32) uintptr
 	fnFileDialogSave       func(title uintptr, directory uintptr, filters uintptr) uintptr
@@ -444,6 +455,11 @@ func registerSystemFunctions() {
 	// For now, we'll check if they exist and skip if not available
 	registerOptionalFunc(&fnClipboardGet, "centered_clipboard_get")
 	registerOptionalFunc(&fnClipboardSet, "centered_clipboard_set")
+	registerOptionalFunc(&fnKeyboardShow, "centered_keyboard_show")
+	registerOptionalFunc(&fnKeyboardHide, "centered_keyboard_hide")
+	registerOptionalFunc(&fnKeyboardIsVisible, "centered_keyboard_is_visible")
+	registerOptionalFunc(&fnHapticFeedback, "centered_haptic_feedback")
+	registerOptionalFunc(&fnGetNaturalScrolling, "centered_get_natural_scrolling")
 	registerOptionalFunc(&fnFileDialogOpen, "centered_file_dialog_open")
 	registerOptionalFunc(&fnFileDialogSave, "centered_file_dialog_save")
 	registerOptionalFunc(&fnFileDialogResultFree, "centered_file_dialog_result_free")
@@ -514,17 +530,20 @@ func goString(ptr uintptr) string {
 type EventType uint8
 
 const (
-	EventReady           EventType = 0
-	EventRedrawRequested EventType = 1
-	EventResized         EventType = 2
-	EventCloseRequested  EventType = 3
-	EventMouseMoved      EventType = 4
-	EventMousePressed    EventType = 5
-	EventMouseReleased   EventType = 6
-	EventKeyPressed      EventType = 7
-	EventKeyReleased     EventType = 8
-	EventCharInput       EventType = 9
-	EventMouseWheel      EventType = 10
+	EventReady                EventType = 0
+	EventRedrawRequested      EventType = 1
+	EventResized              EventType = 2
+	EventCloseRequested       EventType = 3
+	EventMouseMoved           EventType = 4
+	EventMousePressed         EventType = 5
+	EventMouseReleased        EventType = 6
+	EventKeyPressed           EventType = 7
+	EventKeyReleased          EventType = 8
+	EventCharInput            EventType = 9
+	EventMouseWheel           EventType = 10
+	EventSuspended            EventType = 11
+	EventResumed              EventType = 12
+	EventKeyboardFrameChanged EventType = 13
 )
 
 // Modifier flags for keyboard events (stored in Data2)
@@ -2068,6 +2087,85 @@ func ClipboardSetString(text string) {
 	textBytes := append([]byte(text), 0)
 	fnClipboardSet(uintptr(unsafe.Pointer(&textBytes[0])))
 	runtime.KeepAlive(textBytes)
+}
+
+// ============================================================================
+// Keyboard Functions (iOS)
+// ============================================================================
+
+// KeyboardShow shows the software keyboard on iOS.
+// On other platforms, this is a no-op.
+func KeyboardShow() {
+	if !initialized || fnKeyboardShow == nil {
+		return
+	}
+	fnKeyboardShow()
+}
+
+// KeyboardHide hides the software keyboard on iOS.
+// On other platforms, this is a no-op.
+func KeyboardHide() {
+	if !initialized || fnKeyboardHide == nil {
+		return
+	}
+	fnKeyboardHide()
+}
+
+// KeyboardIsVisible returns true if the software keyboard is visible on iOS.
+// On other platforms, always returns false.
+func KeyboardIsVisible() bool {
+	if !initialized || fnKeyboardIsVisible == nil {
+		return false
+	}
+	return fnKeyboardIsVisible() != 0
+}
+
+// ============================================================================
+// Haptic Feedback Functions (iOS)
+// ============================================================================
+
+// HapticStyle represents the type of haptic feedback
+type HapticStyle int32
+
+const (
+	// Impact feedback styles
+	HapticImpactLight  HapticStyle = 0
+	HapticImpactMedium HapticStyle = 1
+	HapticImpactHeavy  HapticStyle = 2
+	HapticImpactSoft   HapticStyle = 3 // iOS 13+
+	HapticImpactRigid  HapticStyle = 4 // iOS 13+
+
+	// Selection feedback
+	HapticSelection HapticStyle = 10
+
+	// Notification feedback
+	HapticNotificationSuccess HapticStyle = 20
+	HapticNotificationWarning HapticStyle = 21
+	HapticNotificationError   HapticStyle = 22
+)
+
+// HapticFeedback triggers haptic feedback on iOS.
+// On other platforms, this is a no-op.
+func HapticFeedback(style HapticStyle) {
+	if !initialized || fnHapticFeedback == nil {
+		return
+	}
+	fnHapticFeedback(int32(style))
+}
+
+// ============================================================================
+// System Preferences Functions
+// ============================================================================
+
+// GetNaturalScrolling returns true if natural scrolling is enabled in system preferences.
+// On macOS, this checks the "com.apple.swipescrolldirection" preference.
+// On iOS, always returns true (touch scrolling is always natural).
+// On other platforms, defaults to true.
+func GetNaturalScrolling() bool {
+	if !initialized || fnGetNaturalScrolling == nil {
+		return true // Default to natural scrolling
+	}
+	return fnGetNaturalScrolling() != 0
 }
 
 // ============================================================================

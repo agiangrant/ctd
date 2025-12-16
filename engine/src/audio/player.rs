@@ -9,7 +9,7 @@
 
 use super::{AudioBackend, AudioError, AudioInfo, PlaybackState};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::macos::MacOSAudioBackend;
 
 /// Audio player that manages playback through platform backends
@@ -91,12 +91,12 @@ impl AudioPlayer {
     }
 
     /// Create platform-specific backend
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     fn create_backend() -> Result<Box<dyn AudioBackend>, AudioError> {
         Ok(Box::new(MacOSAudioBackend::new()))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     fn create_backend() -> Result<Box<dyn AudioBackend>, AudioError> {
         Err(AudioError::UnsupportedPlatform)
     }

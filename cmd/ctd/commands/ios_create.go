@@ -151,6 +151,12 @@ const iosInfoPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<string>UIStatusBarStyleDefault</string>
 	<key>UILaunchStoryboardName</key>
 	<string></string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs camera access for video capture</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access for audio recording</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs photo library access to save media</string>
 </dict>
 </plist>
 `

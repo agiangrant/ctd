@@ -262,6 +262,7 @@ name = "centered-engine"
 version = "0.1.0"
 dependencies = [
  "block",
+ "block2",
  "bytemuck",
  "cocoa",
  "core-foundation",

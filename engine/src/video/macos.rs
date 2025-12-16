@@ -124,36 +124,15 @@ impl MacOSVideoDecoder {
         let temp_path = temp_dir.join(file_name);
         let temp_path_str = temp_path.to_string_lossy().to_string();
 
-        // Use NSURLSession for downloading (synchronous for simplicity)
         unsafe {
             let ns_url = Self::create_http_url(url)?;
 
-            // Create NSURLRequest
-            let request: *mut Object = msg_send![class!(NSURLRequest), requestWithURL: ns_url];
+            // Use NSData's dataWithContentsOfURL - synchronous but works on both macOS and iOS
+            // This is simpler than NSURLSession with blocks and works reliably
+            let data: *mut Object = msg_send![class!(NSData), dataWithContentsOfURL: ns_url];
 
-            // Use synchronous sendSynchronousRequest (deprecated but works)
-            let mut response: *mut Object = ptr::null_mut();
-            let mut error: *mut Object = ptr::null_mut();
-
-            let data: *mut Object = msg_send![
-                class!(NSURLConnection),
-                sendSynchronousRequest: request
-                returningResponse: &mut response
-                error: &mut error
-            ];
-
-            if data.is_null() || !error.is_null() {
-                if !error.is_null() {
-                    let desc: *mut Object = msg_send![error, localizedDescription];
-                    if !desc.is_null() {
-                        let utf8: *const i8 = msg_send![desc, UTF8String];
-                        if !utf8.is_null() {
-                            let error_str = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
-                            return Err(VideoError::LoadError(format!("Download failed: {}", error_str)));
-                        }
-                    }
-                }
-                return Err(VideoError::LoadError("Failed to download video".into()));
+            if data.is_null() {
+                return Err(VideoError::LoadError(format!("Failed to download video from: {}", url)));
             }
 
             // Get data bytes
@@ -368,11 +347,29 @@ impl MacOSVideoDecoder {
         // Start reading
         let started: BOOL = msg_send![asset_reader, startReading];
         if started == NO {
+            // Get error from reader
+            let reader_error: *mut Object = msg_send![asset_reader, error];
+            let error_desc = if !reader_error.is_null() {
+                let desc: *mut Object = msg_send![reader_error, localizedDescription];
+                if !desc.is_null() {
+                    let utf8: *const i8 = msg_send![desc, UTF8String];
+                    if !utf8.is_null() {
+                        std::ffi::CStr::from_ptr(utf8).to_string_lossy().to_string()
+                    } else {
+                        "Unknown error".to_string()
+                    }
+                } else {
+                    "Unknown error".to_string()
+                }
+            } else {
+                "No error object".to_string()
+            };
+            eprintln!("[MacOSVideoDecoder] Failed to start reading: {}", error_desc);
             let _: () = msg_send![video_output, release];
             let _: () = msg_send![asset_reader, release];
             let _: () = msg_send![asset, release];
             let _: () = msg_send![video_track, release];
-            return Err(VideoError::LoadError("Failed to start reading".into()));
+            return Err(VideoError::LoadError(format!("Failed to start reading: {}", error_desc)));
         }
 
         Ok(Self {
@@ -439,6 +436,28 @@ impl VideoDecoder for MacOSVideoDecoder {
         }
 
         unsafe {
+            // Check reader status first
+            let status: i64 = msg_send![self.asset_reader, status];
+            // AVAssetReaderStatus: 0=unknown, 1=reading, 2=completed, 3=failed, 4=cancelled
+            if status != 1 {
+                if status == 3 {
+                    // Failed - get error
+                    let error: *mut Object = msg_send![self.asset_reader, error];
+                    if !error.is_null() {
+                        let desc: *mut Object = msg_send![error, localizedDescription];
+                        if !desc.is_null() {
+                            let utf8: *const i8 = msg_send![desc, UTF8String];
+                            if !utf8.is_null() {
+                                let error_str = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
+                                eprintln!("[VideoDecoder] Reader error: {}", error_str);
+                            }
+                        }
+                    }
+                }
+                self.ended = true;
+                return None;
+            }
+
             // Get next sample buffer
             let sample_buffer: *mut Object = msg_send![self.video_output, copyNextSampleBuffer];
 

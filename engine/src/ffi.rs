@@ -491,8 +491,17 @@ use std::sync::OnceLock;
 /// Global backend storage (single instance for now)
 static BACKEND: OnceLock<Mutex<Option<WgpuBackend>>> = OnceLock::new();
 
-fn get_backend() -> &'static Mutex<Option<WgpuBackend>> {
+/// Get the global backend storage
+/// Used by FFI functions and iOS platform to access the shared backend
+pub fn get_backend() -> &'static Mutex<Option<WgpuBackend>> {
     BACKEND.get_or_init(|| Mutex::new(None))
+}
+
+/// Set the global backend (used by iOS platform)
+pub fn set_backend(backend: WgpuBackend) {
+    let lock = get_backend();
+    let mut guard = lock.lock().unwrap();
+    *guard = Some(backend);
 }
 
 /// Create a rendering backend with a native window handle (macOS: NSView pointer)
@@ -1463,6 +1472,8 @@ pub enum AppEventType {
     Suspended = 11,
     /// App resumed (iOS foregrounded)
     Resumed = 12,
+    /// Keyboard frame changed (data1: height in logical points, 0 if hidden; data2: animation duration in seconds)
+    KeyboardFrameChanged = 13,
 }
 
 /// Event data passed to callback
@@ -2525,6 +2536,48 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
                 data2: 0.0,
                 scale_factor: 1.0,
             },
+            PlatformEvent::KeyPressed { keycode, modifiers } => AppEvent {
+                event_type: AppEventType::KeyPressed,
+                data1: keycode as f64,
+                data2: modifiers as f64,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::KeyReleased { keycode, modifiers } => AppEvent {
+                event_type: AppEventType::KeyReleased,
+                data1: keycode as f64,
+                data2: modifiers as f64,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TextInput { text } => {
+                // Send each character as a CharInput event
+                for c in text.chars() {
+                    let char_event = AppEvent {
+                        event_type: AppEventType::CharInput,
+                        data1: c as u32 as f64,
+                        data2: 0.0, // no modifiers for text input
+                        scale_factor: 1.0,
+                    };
+                    let mut temp_response = FrameResponse {
+                        immediate_commands: std::ptr::null_mut(),
+                        widget_delta: std::ptr::null_mut(),
+                        request_redraw: false,
+                    };
+                    c_callback(&char_event, &mut temp_response, user_data);
+                }
+                return EventResponse::default();
+            },
+            PlatformEvent::Scroll { dx, dy } => AppEvent {
+                event_type: AppEventType::MouseWheel,
+                data1: dx,
+                data2: dy,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::KeyboardFrameChanged { height, animation_duration } => AppEvent {
+                event_type: AppEventType::KeyboardFrameChanged,
+                data1: height,
+                data2: animation_duration,
+                scale_factor: 1.0,
+            },
             _ => return EventResponse::default(),
         };
 
@@ -2974,7 +3027,26 @@ pub extern "C" fn centered_system_dark_mode() -> i32 {
         0 // Default to light mode
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "ios")]
+    {
+        // Check UITraitCollection.currentTraitCollection.userInterfaceStyle
+        // UIUserInterfaceStyleUnspecified = 0, Light = 1, Dark = 2
+        unsafe {
+            let trait_collection: *mut objc::runtime::Object =
+                msg_send![class!(UITraitCollection), currentTraitCollection];
+            if trait_collection.is_null() {
+                return -1;
+            }
+            let style: i64 = msg_send![trait_collection, userInterfaceStyle];
+            match style {
+                2 => 1,  // UIUserInterfaceStyleDark -> return 1 (dark mode)
+                1 => 0,  // UIUserInterfaceStyleLight -> return 0 (light mode)
+                _ => 0,  // Unspecified defaults to light
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios")))]
     {
         -1 // Unsupported platform
     }
@@ -3034,7 +3106,42 @@ pub extern "C" fn centered_clipboard_get() -> *const c_char {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "ios")]
+    {
+        unsafe {
+            // Get general pasteboard (UIPasteboard.generalPasteboard)
+            let pasteboard: *mut objc::runtime::Object = msg_send![class!(UIPasteboard), generalPasteboard];
+            if pasteboard.is_null() {
+                return ptr::null();
+            }
+
+            // Get string property
+            let content: *mut objc::runtime::Object = msg_send![pasteboard, string];
+            if content.is_null() {
+                return ptr::null();
+            }
+
+            let c_str: *const i8 = msg_send![content, UTF8String];
+            if c_str.is_null() {
+                return ptr::null();
+            }
+
+            let rust_str = std::ffi::CStr::from_ptr(c_str).to_string_lossy().into_owned();
+            match CString::new(rust_str) {
+                Ok(cstring) => {
+                    let ptr = cstring.as_ptr();
+                    // Store to keep alive
+                    if let Ok(mut guard) = CLIPBOARD_STRING.lock() {
+                        *guard = Some(cstring);
+                    }
+                    ptr
+                }
+                Err(_) => ptr::null(),
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         ptr::null()
     }
@@ -3072,9 +3179,185 @@ pub unsafe extern "C" fn centered_clipboard_set(text: *const c_char) {
         let _: bool = msg_send![pasteboard, setString: ns_string forType: string_type];
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "ios")]
+    {
+        // Get general pasteboard (UIPasteboard.generalPasteboard)
+        let pasteboard: *mut objc::runtime::Object = msg_send![class!(UIPasteboard), generalPasteboard];
+        if pasteboard.is_null() {
+            return;
+        }
+
+        // Create NSString from text
+        let ns_string: *mut objc::runtime::Object = msg_send![class!(NSString), alloc];
+        let ns_string: *mut objc::runtime::Object = msg_send![ns_string,
+            initWithBytes: text_str.as_ptr()
+            length: text_str.len()
+            encoding: 4u64]; // NSUTF8StringEncoding
+
+        if ns_string.is_null() {
+            return;
+        }
+
+        // Set string on pasteboard
+        let _: () = msg_send![pasteboard, setString: ns_string];
+        let _: () = msg_send![ns_string, release];
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         let _ = text_str; // Suppress unused variable warning
+    }
+}
+
+// ============================================================================
+// Keyboard FFI
+// ============================================================================
+
+/// Show the software keyboard (iOS only)
+/// The view must be able to become first responder
+#[no_mangle]
+pub extern "C" fn centered_keyboard_show() {
+    #[cfg(target_os = "ios")]
+    {
+        crate::platform::ios::show_keyboard();
+    }
+}
+
+/// Hide the software keyboard (iOS only)
+#[no_mangle]
+pub extern "C" fn centered_keyboard_hide() {
+    #[cfg(target_os = "ios")]
+    {
+        crate::platform::ios::hide_keyboard();
+    }
+}
+
+/// Check if keyboard is currently visible (iOS only)
+/// Returns 1 if visible, 0 if hidden
+#[no_mangle]
+pub extern "C" fn centered_keyboard_is_visible() -> i32 {
+    #[cfg(target_os = "ios")]
+    {
+        if crate::platform::ios::is_keyboard_visible() { 1 } else { 0 }
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        0
+    }
+}
+
+// ============================================================================
+// Haptic Feedback FFI
+// ============================================================================
+
+/// Trigger haptic feedback (iOS only)
+///
+/// # Arguments
+/// * `style` - Feedback style:
+///   - 0: Light impact
+///   - 1: Medium impact
+///   - 2: Heavy impact
+///   - 3: Soft impact (iOS 13+)
+///   - 4: Rigid impact (iOS 13+)
+///   - 10: Selection changed
+///   - 20: Notification success
+///   - 21: Notification warning
+///   - 22: Notification error
+///
+/// On non-iOS platforms, this function does nothing.
+#[no_mangle]
+pub extern "C" fn centered_haptic_feedback(style: i32) {
+    #[cfg(target_os = "ios")]
+    {
+        unsafe {
+            match style {
+                // Impact feedback (0-4)
+                0..=4 => {
+                    // UIImpactFeedbackStyle: light=0, medium=1, heavy=2, soft=3, rigid=4
+                    let generator: *mut objc::runtime::Object = msg_send![
+                        class!(UIImpactFeedbackGenerator),
+                        alloc
+                    ];
+                    let generator: *mut objc::runtime::Object = msg_send![
+                        generator,
+                        initWithStyle: style as i64
+                    ];
+                    let _: () = msg_send![generator, prepare];
+                    let _: () = msg_send![generator, impactOccurred];
+                    let _: () = msg_send![generator, release];
+                }
+                // Selection feedback (10)
+                10 => {
+                    let generator: *mut objc::runtime::Object = msg_send![
+                        class!(UISelectionFeedbackGenerator),
+                        new
+                    ];
+                    let _: () = msg_send![generator, prepare];
+                    let _: () = msg_send![generator, selectionChanged];
+                    let _: () = msg_send![generator, release];
+                }
+                // Notification feedback (20-22)
+                20..=22 => {
+                    // UINotificationFeedbackType: success=0, warning=1, error=2
+                    let notification_type = style - 20;
+                    let generator: *mut objc::runtime::Object = msg_send![
+                        class!(UINotificationFeedbackGenerator),
+                        new
+                    ];
+                    let _: () = msg_send![generator, prepare];
+                    let _: () = msg_send![generator, notificationOccurred: notification_type as i64];
+                    let _: () = msg_send![generator, release];
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = style; // Suppress unused variable warning
+    }
+}
+
+// ============================================================================
+// System Preferences FFI
+// ============================================================================
+
+/// Check if natural scrolling is enabled on macOS
+/// Returns 1 if natural scrolling is enabled (default), 0 if disabled
+/// On non-macOS platforms, always returns 1 (natural scrolling for touch devices)
+///
+/// # Safety
+/// This function is safe to call from any thread
+#[no_mangle]
+pub extern "C" fn centered_get_natural_scrolling() -> i32 {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::NSString;
+
+        unsafe {
+            let defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
+            // com.apple.swipescrolldirection is the key for natural scrolling
+            // Returns true (1) when natural scrolling is ON (default)
+            let key = NSString::alloc(nil).init_str("com.apple.swipescrolldirection");
+            let enabled: bool = msg_send![defaults, boolForKey: key];
+            if enabled { 1 } else { 0 }
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        // iOS always uses natural scrolling (touch-based)
+        1
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        // Default to natural scrolling on other platforms
+        // TODO: Check Windows/Linux scroll direction preferences if needed
+        1
     }
 }
 

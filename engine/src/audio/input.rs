@@ -1,7 +1,7 @@
 //! Audio input (microphone) capture
 //!
 //! Provides cross-platform audio input capture using platform-specific backends.
-//! On macOS, uses AVFoundation's AVCaptureSession for microphone access.
+//! On macOS/iOS, uses AVFoundation's AVCaptureSession for microphone access.
 
 use super::{AudioError, AudioInfo};
 
@@ -124,11 +124,11 @@ pub trait AudioInputBackend: Send {
 
 /// Cross-platform audio input
 pub struct AudioInput {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     backend: super::macos_input::MacOSAudioInput,
 
-    // Placeholder for non-macOS platforms
-    #[cfg(not(target_os = "macos"))]
+    // Placeholder for unsupported platforms
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     _phantom: std::marker::PhantomData<()>,
 }
 
@@ -136,42 +136,42 @@ impl AudioInput {
     /// Create a new audio input instance
     pub fn new() -> Self {
         Self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             backend: super::macos_input::MacOSAudioInput::new(),
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Request microphone permission (shows system dialog if needed)
     pub fn request_permission(&mut self) -> Result<(), AudioError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.request_permission();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Check if permission was granted
     pub fn has_permission(&self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.has_permission();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         false
     }
 
     /// List available audio input devices
     pub fn list_devices(&self) -> Result<Vec<AudioInputDevice>, AudioError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.list_devices();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Open a specific device (or default if None)
     pub fn open(&mut self, device_id: Option<&str>, config: &AudioInputConfig) -> Result<(), AudioError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.open(device_id, config);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             let _ = (device_id, config);
             Err(AudioError::UnsupportedPlatform)
@@ -180,55 +180,55 @@ impl AudioInput {
 
     /// Start capturing audio
     pub fn start(&mut self) -> Result<(), AudioError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.start();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Stop capturing audio
     pub fn stop(&mut self) -> Result<(), AudioError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.stop();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Close the device
     pub fn close(&mut self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         self.backend.close();
     }
 
     /// Get current state
     pub fn state(&self) -> AudioInputState {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.state();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         AudioInputState::Idle
     }
 
     /// Get audio info
     pub fn info(&self) -> Option<&AudioInfo> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.info();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         None
     }
 
     /// Set callback for audio samples
     pub fn set_sample_callback(&mut self, callback: Option<AudioSampleCallback>) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         self.backend.set_sample_callback(callback);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         let _ = callback;
     }
 
     /// Get current audio level (0.0 - 1.0)
     pub fn level(&self) -> f32 {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return self.backend.level();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         0.0
     }
 }
