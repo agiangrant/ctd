@@ -2,11 +2,22 @@
 //!
 //! Provides a unified interface for loading fonts from different sources
 //! (system, bundled files, embedded data) and caching them for performance.
+//!
+//! # Platform Implementation Guide
+//!
+//! To add support for a new platform, implement the [`PlatformFontManagerTrait`] trait:
+//!
+//! 1. Create a new module (e.g., `windows.rs` for Windows/DirectWrite)
+//! 2. Implement a font struct that implements the [`Font`] trait
+//! 3. Implement a font manager struct that implements [`PlatformFontManagerTrait`]
+//! 4. Add the appropriate `#[cfg(...)]` gates in this file
+//!
+//! See `macos.rs` for a reference implementation using Core Text.
 
 use super::{FontDescriptor, FontSource, FontStyle};
 use std::collections::HashMap;
 
-// Core Text is available on both macOS and iOS
+// Platform-specific font manager implementations
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos;
 
@@ -15,24 +26,101 @@ pub use macos::MacOSFontManager as PlatformFontManager;
 
 // Stub font manager for unsupported platforms
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub struct StubFontManager;
+pub use stub::StubFontManager as PlatformFontManager;
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-impl StubFontManager {
-    pub fn new() -> Self { Self }
-    pub fn load_font(&mut self, _desc: &FontDescriptor) -> Result<Font, FontError> {
-        Err(FontError::NotFound("Platform not supported".into()))
-    }
-    pub fn get_or_load_font(&mut self, _desc: &FontDescriptor) -> Result<Font, FontError> {
-        Err(FontError::NotFound("Platform not supported".into()))
-    }
-    pub fn measure_text(&mut self, _text: &str, _desc: &FontDescriptor) -> f32 {
-        0.0
+mod stub {
+    use super::*;
+
+    /// Stub font manager for platforms without text rendering support.
+    /// Returns errors for all operations.
+    pub struct StubFontManager;
+
+    impl PlatformFontManagerTrait for StubFontManager {
+        fn new() -> Self {
+            Self
+        }
+
+        fn load_system_font(
+            &mut self,
+            name: &str,
+            _weight: u16,
+            _style: FontStyle,
+            _size: f32,
+        ) -> Result<Box<dyn Font>, FontError> {
+            Err(FontError::Unsupported(format!(
+                "Text rendering not supported on this platform. Cannot load font '{}'",
+                name
+            )))
+        }
+
+        fn load_font_from_data(
+            &mut self,
+            _data: &[u8],
+            _weight: u16,
+            _style: FontStyle,
+            _size: f32,
+        ) -> Result<Box<dyn Font>, FontError> {
+            Err(FontError::Unsupported(
+                "Text rendering not supported on this platform".to_string()
+            ))
+        }
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub type PlatformFontManager = StubFontManager;
+/// Trait for platform-specific font loading implementations.
+///
+/// Each platform (macOS, Windows, Linux, Web) implements this trait using
+/// native text rendering APIs:
+/// - macOS/iOS: Core Text
+/// - Windows: DirectWrite
+/// - Linux: FreeType + HarfBuzz
+/// - Web/WASM: Canvas 2D API
+///
+/// # Implementation Notes
+///
+/// - Font weight uses the CSS numeric scale (100-900, where 400 = normal, 700 = bold)
+/// - Font style is either Normal or Italic
+/// - Returned fonts must be thread-safe (`Send + Sync`)
+/// - Font data for `load_font_from_data` is raw TTF/OTF bytes
+pub trait PlatformFontManagerTrait {
+    /// Create a new platform font manager.
+    fn new() -> Self where Self: Sized;
+
+    /// Load a system font by name.
+    ///
+    /// # Arguments
+    /// - `name`: Font family name (e.g., "Helvetica", "Arial") or "system" for platform default
+    /// - `weight`: Font weight (100-900 scale, 400 = normal, 700 = bold)
+    /// - `style`: Font style (Normal or Italic)
+    /// - `size`: Font size in points
+    ///
+    /// # Platform-Specific Behavior
+    /// - "system" or empty string should return the platform's default UI font
+    /// - Weight mapping may vary by platform (some fonts only support regular/bold)
+    fn load_system_font(
+        &mut self,
+        name: &str,
+        weight: u16,
+        style: FontStyle,
+        size: f32,
+    ) -> Result<Box<dyn Font>, FontError>;
+
+    /// Load a font from raw TTF/OTF data.
+    ///
+    /// # Arguments
+    /// - `data`: Raw font file bytes (TTF or OTF format)
+    /// - `weight`: Requested font weight (may be ignored if font doesn't support variants)
+    /// - `style`: Requested font style (may be ignored if font doesn't support variants)
+    /// - `size`: Font size in points
+    fn load_font_from_data(
+        &mut self,
+        data: &[u8],
+        weight: u16,
+        style: FontStyle,
+        size: f32,
+    ) -> Result<Box<dyn Font>, FontError>;
+}
 
 /// Glyph metrics for a single character
 #[derive(Debug, Clone, Copy)]

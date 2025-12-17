@@ -479,19 +479,35 @@ pub trait GlyphRasterizer {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type PlatformGlyphRasterizer = MacOSGlyphRasterizer;
 
-/// Stub rasterizer for unsupported platforms
+// Stub rasterizer for unsupported platforms
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub struct StubGlyphRasterizer;
+pub use stub::StubGlyphRasterizer as PlatformGlyphRasterizer;
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-impl GlyphRasterizer for StubGlyphRasterizer {
-    fn rasterize_glyph(&mut self, _character: char, _font: &super::FontDescriptor) -> Option<GlyphBitmap> {
-        None
+mod stub {
+    use super::*;
+
+    /// Stub glyph rasterizer for platforms without text rendering support.
+    /// Returns None for all rasterization requests.
+    pub struct StubGlyphRasterizer;
+
+    impl StubGlyphRasterizer {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    impl GlyphRasterizer for StubGlyphRasterizer {
+        fn rasterize_glyph(
+            &mut self,
+            _character: char,
+            _font: &super::FontDescriptor,
+        ) -> Option<GlyphBitmap> {
+            // Glyph rasterization not supported on this platform
+            None
+        }
     }
 }
-
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub type PlatformGlyphRasterizer = StubGlyphRasterizer;
 
 #[cfg(test)]
 mod tests {

@@ -3,7 +3,7 @@
 //! Uses Apple's Core Text framework for font loading, glyph metrics,
 //! and text shaping on macOS and iOS.
 
-use super::{Font, FontError, GlyphMetrics};
+use super::{Font, FontError, GlyphMetrics, PlatformFontManagerTrait};
 use crate::text::FontStyle;
 use core_foundation::attributed_string::CFMutableAttributedString;
 use core_foundation::base::TCFType;
@@ -139,12 +139,8 @@ impl Font for MacOSFont {
 pub struct MacOSFontManager;
 
 impl MacOSFontManager {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Get the font name for a given weight
-    /// San Francisco (system font) has named variants for different weights
+    /// Get the font name for a given weight.
+    /// San Francisco (system font) has named variants for different weights.
     fn get_system_font_name_for_weight(weight: u16) -> &'static str {
         // San Francisco system font weight variants
         match weight {
@@ -159,9 +155,14 @@ impl MacOSFontManager {
             _ => ".AppleSystemUIFontBlack",  // 850+
         }
     }
+}
 
-    /// Load a system font by name with weight and style
-    pub fn load_system_font(
+impl PlatformFontManagerTrait for MacOSFontManager {
+    fn new() -> Self {
+        Self
+    }
+
+    fn load_system_font(
         &mut self,
         name: &str,
         weight: u16,
@@ -238,8 +239,7 @@ impl MacOSFontManager {
         Ok(Box::new(MacOSFont::new(ct_font, size)))
     }
 
-    /// Load a font from data (TTF/OTF file)
-    pub fn load_font_from_data(
+    fn load_font_from_data(
         &mut self,
         data: &[u8],
         _weight: u16,

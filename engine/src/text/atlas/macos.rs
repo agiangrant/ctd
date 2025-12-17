@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_glyph() {
-        let rasterizer = MacOSGlyphRasterizer::new();
+        let mut rasterizer = MacOSGlyphRasterizer::new();
         let font = FontDescriptor::system("San Francisco", 400, FontStyle::Normal, 16.0);
         let bitmap = rasterizer.rasterize_glyph('A', &font);
 
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_whitespace() {
-        let rasterizer = MacOSGlyphRasterizer::new();
+        let mut rasterizer = MacOSGlyphRasterizer::new();
         let font = FontDescriptor::system("San Francisco", 400, FontStyle::Normal, 16.0);
         let bitmap = rasterizer.rasterize_glyph(' ', &font);
 
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_different_weights() {
-        let rasterizer = MacOSGlyphRasterizer::new();
+        let mut rasterizer = MacOSGlyphRasterizer::new();
 
         // Regular weight
         let regular = FontDescriptor::system("system", 400, FontStyle::Normal, 16.0);

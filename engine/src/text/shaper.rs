@@ -130,19 +130,37 @@ pub trait TextShaper {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type PlatformTextShaper = MacOSTextShaper;
 
-/// Stub shaper for unsupported platforms
+// Stub shaper for unsupported platforms
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub struct StubTextShaper;
+pub use stub::StubTextShaper as PlatformTextShaper;
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-impl TextShaper for StubTextShaper {
-    fn shape(&self, _text: &str, _font: &FontDescriptor, _config: &TextLayoutConfig) -> Result<ShapedText, ShaperError> {
-        Ok(ShapedText::empty())
+mod stub {
+    use super::*;
+    use crate::text::font_manager::Font;
+
+    /// Stub text shaper for platforms without text rendering support.
+    /// Returns empty shaped text for all operations.
+    pub struct StubTextShaper;
+
+    impl StubTextShaper {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    impl TextShaper for StubTextShaper {
+        fn shape_text(
+            &self,
+            _text: &str,
+            _font: &dyn Font,
+            _config: &TextLayoutConfig,
+        ) -> Result<ShapedText, ShaperError> {
+            // Return empty text - rendering is not supported on this platform
+            Ok(ShapedText::empty())
+        }
     }
 }
-
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub type PlatformTextShaper = StubTextShaper;
 
 #[cfg(test)]
 mod tests {
