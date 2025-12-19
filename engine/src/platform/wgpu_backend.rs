@@ -14,6 +14,10 @@ use wgpu::util::DeviceExt;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::text::atlas::MacOSGlyphRasterizer;
 
+#[cfg(target_os = "android")]
+use crate::text::atlas::AndroidGlyphRasterizer;
+
+
 /// Surface configuration for wgpu
 pub struct SurfaceConfig {
     pub width: u32,
@@ -97,11 +101,16 @@ pub struct WgpuBackend {
     // Render pipeline for colored geometry (triangles, rectangles)
     geometry_pipeline: Option<wgpu::RenderPipeline>,
 
-    // Glyph atlas
+    // Glyph atlas (platform-specific rasterizers)
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     glyph_atlas: GlyphAtlas,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     rasterizer: MacOSGlyphRasterizer,
+
+    #[cfg(target_os = "android")]
+    glyph_atlas: GlyphAtlas,
+    #[cfg(target_os = "android")]
+    rasterizer: AndroidGlyphRasterizer,
 
     // Configuration
     width: u32,
@@ -123,9 +132,15 @@ pub struct WgpuBackend {
 
 impl WgpuBackend {
     pub fn new() -> Self {
-        // Create wgpu instance with default backends
+        // Create wgpu instance
+        // On Android, prefer Vulkan to avoid EGL surface conflicts with NativeActivity
+        #[cfg(target_os = "android")]
+        let backends = wgpu::Backends::VULKAN;
+        #[cfg(not(target_os = "android"))]
+        let backends = wgpu::Backends::all();
+
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends,
             ..Default::default()
         });
 
@@ -144,6 +159,10 @@ impl WgpuBackend {
             glyph_atlas: GlyphAtlas::new(2048, 2048),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             rasterizer: MacOSGlyphRasterizer::new(),
+            #[cfg(target_os = "android")]
+            glyph_atlas: GlyphAtlas::new(2048, 2048),
+            #[cfg(target_os = "android")]
+            rasterizer: AndroidGlyphRasterizer::new(),
             width: 0,
             height: 0,
             scale_factor: 1.0,
@@ -209,12 +228,27 @@ impl WgpuBackend {
         println!("wgpu adapter: {:?}", adapter.get_info());
 
         // Request device and queue
+        // Use downlevel limits for emulators (GLES), full limits for real devices (Vulkan)
+        let adapter_info = adapter.get_info();
+        let is_emulator = adapter_info.name.contains("Emulator")
+            || adapter_info.name.contains("SwiftShader")
+            || adapter_info.backend == wgpu::Backend::Gl;
+
+        let required_limits = if is_emulator {
+            // Emulators often use GLES which doesn't support compute shaders
+            wgpu::Limits::downlevel_webgl2_defaults()
+                .using_resolution(adapter.limits())
+        } else {
+            // Real devices with Vulkan support full limits
+            wgpu::Limits::default()
+        };
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("Centered Engine Device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_limits,
                     memory_hints: Default::default(),
                 },
                 None,
@@ -380,6 +414,7 @@ impl WgpuBackend {
                         0 => Float32x2,  // position
                         1 => Float32x2,  // tex_coords
                         2 => Float32x4,  // color
+                        3 => Float32,    // use_texture_color (1.0 for emoji, 0.0 for text)
                     ],
                 }],
                 compilation_options: Default::default(),
@@ -525,6 +560,7 @@ impl WgpuBackend {
                         0 => Float32x2,  // position
                         1 => Float32x2,  // tex_coords
                         2 => Float32x4,  // color
+                        3 => Float32,    // use_texture_color (unused for images, but needed for struct alignment)
                     ],
                 }],
                 compilation_options: Default::default(),
@@ -808,7 +844,7 @@ impl WgpuBackend {
 
     /// Upload atlas texture to GPU if dirty
     fn upload_atlas_if_needed(&mut self) -> Result<(), Box<dyn Error>> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
         {
             if self.glyph_atlas.is_dirty() {
                 let queue = self.queue.as_ref().ok_or("Queue not initialized")?;
@@ -1354,7 +1390,7 @@ impl WgpuBackend {
     }
 
     /// Render text at the given position with multi-line support
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
     fn render_text(
         &mut self,
         render_pass: &mut wgpu::RenderPass,
@@ -1562,6 +1598,14 @@ impl WgpuBackend {
             for glyph_info in &line.glyphs {
                 let entry = glyph_info.entry;
 
+                // For emojis, use white color (no tint) so they render with native colors
+                // For regular text, use the specified text_color
+                let glyph_color = if glyph_info.is_emoji {
+                    [1.0, 1.0, 1.0, a] // White with same alpha as text
+                } else {
+                    text_color
+                };
+
                 // Calculate quad positions
                 let glyph_x = current_x + entry.bearing_x;
                 let glyph_y = line_baseline_y - entry.bearing_y;
@@ -1574,39 +1618,48 @@ impl WgpuBackend {
                 let bottom_left = self.screen_to_ndc(glyph_x, glyph_y + glyph_height);
                 let bottom_right = self.screen_to_ndc(glyph_x + glyph_width, glyph_y + glyph_height);
 
+                // For emojis, use texture color directly; for text, use vertex color for tinting
+                let use_texture_color = if glyph_info.is_emoji { 1.0 } else { 0.0 };
+
                 // Create 6 vertices for 2 triangles (quad)
                 // Triangle 1: top-left, bottom-left, top-right
                 vertices.push(TextVertex {
                     position: top_left,
                     tex_coords: [entry.u0, entry.v0],
-                    color: text_color,
+                    color: glyph_color,
+                    use_texture_color,
                 });
                 vertices.push(TextVertex {
                     position: bottom_left,
                     tex_coords: [entry.u0, entry.v1],
-                    color: text_color,
+                    color: glyph_color,
+                    use_texture_color,
                 });
                 vertices.push(TextVertex {
                     position: top_right,
                     tex_coords: [entry.u1, entry.v0],
-                    color: text_color,
+                    color: glyph_color,
+                    use_texture_color,
                 });
 
                 // Triangle 2: top-right, bottom-left, bottom-right
                 vertices.push(TextVertex {
                     position: top_right,
                     tex_coords: [entry.u1, entry.v0],
-                    color: text_color,
+                    color: glyph_color,
+                    use_texture_color,
                 });
                 vertices.push(TextVertex {
                     position: bottom_left,
                     tex_coords: [entry.u0, entry.v1],
-                    color: text_color,
+                    color: glyph_color,
+                    use_texture_color,
                 });
                 vertices.push(TextVertex {
                     position: bottom_right,
                     tex_coords: [entry.u1, entry.v1],
-                    color: text_color,
+                    color: glyph_color,
+                    use_texture_color,
                 });
 
                 // Advance cursor with letter spacing (and word spacing + justify for spaces)
@@ -1647,9 +1700,15 @@ impl WgpuBackend {
     }
 
     /// Calculate the width of glyphs including letter and word spacing
+    /// Note: letter_spacing is added BETWEEN letters, not after the last one
     fn calculate_glyphs_width(glyphs: &[GlyphInfo], letter_spacing: f32, word_spacing: f32) -> f32 {
-        glyphs.iter().map(|g| {
-            let mut advance = g.entry.advance + letter_spacing;
+        let len = glyphs.len();
+        glyphs.iter().enumerate().map(|(i, g)| {
+            let mut advance = g.entry.advance;
+            // Add letter_spacing between letters (not after the last one)
+            if i < len - 1 {
+                advance += letter_spacing;
+            }
             if g.character == ' ' {
                 advance += word_spacing;
             }
@@ -1658,7 +1717,7 @@ impl WgpuBackend {
     }
 
     /// Layout text into lines with word wrapping
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
     fn layout_text_lines(
         &mut self,
         text: &str,
@@ -1704,18 +1763,37 @@ impl WgpuBackend {
                 let mut current_line_glyphs = Vec::new();
                 let mut current_line_width = 0.0f32;
 
+                // Debug: log wrapping info for text with emojis (Android only)
+                #[cfg(target_os = "android")]
+                let has_emoji = paragraph.chars().any(|c| is_emoji(c));
+                #[cfg(target_os = "android")]
+                if has_emoji {
+                    log::info!("TEXT WRAP: paragraph='{}', max_w={:.1}, words={:?}",
+                        paragraph, max_w, words);
+                }
+
                 for word in words {
                     // Measure the word
                     let word_glyphs = self.rasterize_text_segment(&word, scaled_font, font_id, font_size)?;
                     let word_width = Self::calculate_glyphs_width(&word_glyphs, letter_spacing, word_spacing);
 
+                    #[cfg(target_os = "android")]
+                    if has_emoji {
+                        log::info!("  WORD '{}': width={:.1}, current_line={:.1}, would_be={:.1}, max={:.1}, fits={}",
+                            word, word_width, current_line_width,
+                            current_line_width + word_width, max_w,
+                            current_line_width + word_width <= max_w || current_line_glyphs.is_empty());
+                    }
+
                     // Check if word fits on current line
+                    // Small tolerance for floating point rounding only
+                    let overflow_tolerance = 1.0;
                     if current_line_glyphs.is_empty() {
                         // First word on line - always add it (even if too long)
                         current_line_glyphs.extend(word_glyphs);
                         current_line_width = word_width;
-                    } else if current_line_width + word_width <= max_w {
-                        // Word fits - add it
+                    } else if current_line_width + word_width <= max_w + overflow_tolerance {
+                        // Word fits (with small tolerance) - add it
                         current_line_glyphs.extend(word_glyphs);
                         current_line_width += word_width;
                     } else {
@@ -1817,7 +1895,7 @@ impl WgpuBackend {
     }
 
     /// Rasterize a text segment and return glyph info
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
     fn rasterize_text_segment(
         &mut self,
         text: &str,
@@ -1844,13 +1922,13 @@ impl WgpuBackend {
                 }
             };
 
-            glyphs.push(GlyphInfo { character: ch, entry });
+            glyphs.push(GlyphInfo { character: ch, entry, is_emoji: is_emoji(ch) });
         }
 
         Ok(glyphs)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     fn render_text(
         &mut self,
         _render_pass: &mut wgpu::RenderPass,
@@ -1922,14 +2000,14 @@ impl WgpuBackend {
             let br = self.screen_to_ndc(right, bottom);
 
             vec![
-                // Triangle 1
-                TextVertex { position: tl, tex_coords: [u0, v0], color },
-                TextVertex { position: bl, tex_coords: [u0, v1], color },
-                TextVertex { position: tr, tex_coords: [u1, v0], color },
+                // Triangle 1 - images always use texture color directly
+                TextVertex { position: tl, tex_coords: [u0, v0], color, use_texture_color: 1.0 },
+                TextVertex { position: bl, tex_coords: [u0, v1], color, use_texture_color: 1.0 },
+                TextVertex { position: tr, tex_coords: [u1, v0], color, use_texture_color: 1.0 },
                 // Triangle 2
-                TextVertex { position: tr, tex_coords: [u1, v0], color },
-                TextVertex { position: bl, tex_coords: [u0, v1], color },
-                TextVertex { position: br, tex_coords: [u1, v1], color },
+                TextVertex { position: tr, tex_coords: [u1, v0], color, use_texture_color: 1.0 },
+                TextVertex { position: bl, tex_coords: [u0, v1], color, use_texture_color: 1.0 },
+                TextVertex { position: br, tex_coords: [u1, v1], color, use_texture_color: 1.0 },
             ]
         };
 
@@ -2039,10 +2117,10 @@ impl WgpuBackend {
             let p1_uv = pos_to_uv(p1.0, p1.1);
             let p2_uv = pos_to_uv(p2.0, p2.1);
 
-            // Triangle: center, p1, p2
-            vertices.push(TextVertex { position: center_ndc, tex_coords: center_uv, color });
-            vertices.push(TextVertex { position: p1_ndc, tex_coords: p1_uv, color });
-            vertices.push(TextVertex { position: p2_ndc, tex_coords: p2_uv, color });
+            // Triangle: center, p1, p2 - images always use texture color directly
+            vertices.push(TextVertex { position: center_ndc, tex_coords: center_uv, color, use_texture_color: 1.0 });
+            vertices.push(TextVertex { position: p1_ndc, tex_coords: p1_uv, color, use_texture_color: 1.0 });
+            vertices.push(TextVertex { position: p2_ndc, tex_coords: p2_uv, color, use_texture_color: 1.0 });
         }
 
         vertices
@@ -2060,6 +2138,42 @@ struct TextLine {
 struct GlyphInfo {
     character: char,
     entry: crate::text::AtlasEntry,
+    is_emoji: bool,
+}
+
+/// Check if a character is an emoji (should render with native colors, not text color)
+fn is_emoji(c: char) -> bool {
+    let cp = c as u32;
+
+    // Emoji ranges (simplified but covers most common cases)
+    matches!(cp,
+        // Emoticons
+        0x1F600..=0x1F64F |
+        // Miscellaneous Symbols and Pictographs
+        0x1F300..=0x1F5FF |
+        // Transport and Map Symbols
+        0x1F680..=0x1F6FF |
+        // Supplemental Symbols and Pictographs
+        0x1F900..=0x1F9FF |
+        // Symbols and Pictographs Extended-A
+        0x1FA00..=0x1FA6F |
+        // Symbols and Pictographs Extended-B
+        0x1FA70..=0x1FAFF |
+        // Dingbats
+        0x2700..=0x27BF |
+        // Miscellaneous Symbols
+        0x2600..=0x26FF |
+        // Regional Indicator Symbols (flags)
+        0x1F1E0..=0x1F1FF |
+        // Skin tone modifiers
+        0x1F3FB..=0x1F3FF |
+        // Food and Drink
+        0x1F32D..=0x1F37F |
+        // Additional common emoji ranges
+        0x1F400..=0x1F4FF |
+        // Musical symbols that are often emoji
+        0x1F3A0..=0x1F3FF
+    )
 }
 
 #[repr(C)]
@@ -2068,6 +2182,9 @@ struct TextVertex {
     position: [f32; 2],
     tex_coords: [f32; 2],
     color: [f32; 4],
+    /// 1.0 = use texture RGB directly (for emojis)
+    /// 0.0 = use vertex color RGB (for regular text)
+    use_texture_color: f32,
 }
 
 #[repr(C)]

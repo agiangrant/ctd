@@ -649,8 +649,8 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 	case ffi.EventMousePressed:
 		var x, y float32
 		var button MouseButton
-		if runtime.GOOS == "ios" {
-			// On iOS, TouchBegan sends x/y coordinates in Data1/Data2
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+			// On mobile (iOS/Android), touch events send x/y coordinates directly
 			x, y = float32(event.MouseX()), float32(event.MouseY())
 			button = MouseButtonLeft // Touch is always "left click"
 			// Update cached position for consistency
@@ -668,8 +668,8 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 	case ffi.EventMouseReleased:
 		var x, y float32
 		var button MouseButton
-		if runtime.GOOS == "ios" {
-			// On iOS, TouchEnded sends x/y coordinates in Data1/Data2
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+			// On mobile (iOS/Android), touch events send x/y coordinates directly
 			x, y = float32(event.MouseX()), float32(event.MouseY())
 			button = MouseButtonLeft // Touch is always "left click"
 			// Update cached position for consistency

@@ -1,7 +1,10 @@
 package retained
 
 import (
+	"runtime"
 	"time"
+
+	"github.com/agiangrant/centered/internal/ffi"
 )
 
 // abs returns the absolute value of a float32.
@@ -823,7 +826,18 @@ func (d *EventDispatcher) dispatchKeyEvent(target *Widget, e *KeyEvent) {
 // Focus Management
 // ============================================================================
 
+// isTextInputWidget returns true if the widget is a text input (TextField or TextArea)
+func isTextInputWidget(w *Widget) bool {
+	if w == nil {
+		return false
+	}
+	kind := w.Kind()
+	return kind == KindTextField || kind == KindTextArea
+}
+
 // setFocus changes the focused widget, dispatching blur/focus events.
+// On mobile platforms (iOS/Android), automatically shows/hides the software keyboard
+// when focusing/blurring text input widgets.
 func (d *EventDispatcher) setFocus(newFocus *Widget) {
 	oldFocus := d.focusedWidget
 
@@ -847,6 +861,21 @@ func (d *EventDispatcher) setFocus(newFocus *Widget) {
 		e := NewFocusEvent(EventFocus, oldFocus)
 		e.target = newFocus
 		newFocus.HandleEvent(e, PhaseBubble)
+	}
+
+	// On mobile platforms, automatically manage software keyboard for text inputs
+	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+		oldIsTextInput := isTextInputWidget(oldFocus)
+		newIsTextInput := isTextInputWidget(newFocus)
+
+		if newIsTextInput && !oldIsTextInput {
+			// Focusing a text input - show keyboard
+			ffi.KeyboardShow()
+		} else if oldIsTextInput && !newIsTextInput {
+			// Blurring a text input (focus moved elsewhere or nil) - hide keyboard
+			ffi.KeyboardHide()
+		}
+		// If both are text inputs, keyboard stays visible
 	}
 }
 

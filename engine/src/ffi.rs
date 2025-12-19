@@ -2401,8 +2401,14 @@ pub unsafe extern "C" fn centered_app_run(
         return run_ios_app(config, callback);
     }
 
+    // On Android, use our native android-activity backend
+    #[cfg(target_os = "android")]
+    {
+        return run_android_app(config, callback);
+    }
+
     // On desktop platforms, use winit
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
         return run_winit_app(config, callback);
     }
@@ -2641,8 +2647,195 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
     0
 }
 
+/// Android app runner using android-activity
+/// On Android, this is called from Go's ready handler (after the native activity is running).
+/// Similar to iOS - it registers the callback, the event loop is already managed by android-activity.
+#[cfg(target_os = "android")]
+unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
+    use crate::platform::android::register_callback;
+    use crate::platform::backend::{PlatformEvent, EventResponse};
+
+    log::info!("[FFI] run_android_app: registering callback");
+
+    // Wrap the C callback in a Rust closure that translates events
+    let user_data = config.user_data;
+    let c_callback = callback;
+
+    let rust_callback = move |event: PlatformEvent| -> EventResponse {
+        // Translate PlatformEvent to AppEvent
+        let app_event = match event {
+            PlatformEvent::Ready { width, height, scale_factor } => AppEvent {
+                event_type: AppEventType::Ready,
+                data1: width,
+                data2: height,
+                scale_factor,
+            },
+            PlatformEvent::RedrawRequested => AppEvent {
+                event_type: AppEventType::RedrawRequested,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::Resized { width, height, scale_factor } => AppEvent {
+                event_type: AppEventType::Resized,
+                data1: width,
+                data2: height,
+                scale_factor,
+            },
+            PlatformEvent::CloseRequested => AppEvent {
+                event_type: AppEventType::CloseRequested,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchBegan { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MousePressed,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchMoved { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MouseMoved,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchEnded { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MouseReleased,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TouchCancelled { id: _, x, y } => AppEvent {
+                event_type: AppEventType::MouseReleased,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::KeyPressed { keycode, modifiers } => AppEvent {
+                event_type: AppEventType::KeyPressed,
+                data1: keycode as f64,
+                data2: modifiers as f64,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::KeyReleased { keycode, modifiers } => AppEvent {
+                event_type: AppEventType::KeyReleased,
+                data1: keycode as f64,
+                data2: modifiers as f64,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::TextInput { text } => {
+                // For text input, we need to return characters through the callback
+                // Store text globally and return a special event type
+                // For now, send each character as a CharInput event
+                for c in text.chars() {
+                    let char_event = AppEvent {
+                        event_type: AppEventType::CharInput,
+                        data1: c as u32 as f64,
+                        data2: 0.0,
+                        scale_factor: 1.0,
+                    };
+                    let mut temp_response = FrameResponse {
+                        immediate_commands: std::ptr::null_mut(),
+                        widget_delta: std::ptr::null_mut(),
+                        request_redraw: false,
+                    };
+                    c_callback(&char_event, &mut temp_response, user_data);
+                }
+                // Return a placeholder event (the actual char events were already sent)
+                return EventResponse::default();
+            },
+            PlatformEvent::Suspended => AppEvent {
+                event_type: AppEventType::Suspended,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::Resumed => AppEvent {
+                event_type: AppEventType::Resumed,
+                data1: 0.0,
+                data2: 0.0,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::MemoryWarning => {
+                // No direct equivalent in AppEventType, just log it
+                log::warn!("Memory warning received");
+                return EventResponse::default();
+            },
+            PlatformEvent::KeyboardFrameChanged { height, animation_duration } => AppEvent {
+                event_type: AppEventType::KeyboardFrameChanged,
+                data1: height,
+                data2: animation_duration,
+                scale_factor: 1.0,
+            },
+            // Mouse events (desktop) - shouldn't happen on Android but handle anyway
+            PlatformEvent::PointerMoved { x, y } => AppEvent {
+                event_type: AppEventType::MouseMoved,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::PointerPressed { x, y, button: _ } => AppEvent {
+                event_type: AppEventType::MousePressed,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::PointerReleased { x, y, button: _ } => AppEvent {
+                event_type: AppEventType::MouseReleased,
+                data1: x,
+                data2: y,
+                scale_factor: 1.0,
+            },
+            PlatformEvent::Scroll { dx, dy } => AppEvent {
+                event_type: AppEventType::MouseWheel,
+                data1: dx,
+                data2: dy,
+                scale_factor: 1.0,
+            },
+        };
+
+        // Call the C callback
+        let mut frame_response = FrameResponse {
+            immediate_commands: std::ptr::null_mut(),
+            widget_delta: std::ptr::null_mut(),
+            request_redraw: false,
+        };
+
+        c_callback(&app_event, &mut frame_response, user_data);
+
+        // Process immediate commands if provided
+        if !frame_response.immediate_commands.is_null() {
+            let json_str = match std::ffi::CStr::from_ptr(frame_response.immediate_commands).to_str() {
+                Ok(s) => s,
+                Err(_) => return EventResponse::default(),
+            };
+
+            if let Ok(commands) = serde_json::from_str::<Vec<RenderCommand>>(json_str) {
+                // Use thread-local backend for Android (similar to iOS)
+                if let Err(e) = crate::platform::android::render_frame(&commands) {
+                    log::error!("[Android] Render error: {}", e);
+                }
+            }
+        }
+
+        EventResponse {
+            request_redraw: frame_response.request_redraw,
+            exit: false,
+        }
+    };
+
+    // On Android, register the callback - the event loop is already running via android-activity
+    register_callback(Box::new(rust_callback));
+
+    log::info!("[FFI] run_android_app: callback registered, returning");
+
+    // Return 0 - the event loop is already running
+    0
+}
+
 /// Desktop app runner using winit
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
     // Create event loop with custom user event type for cross-thread signaling
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
@@ -3221,27 +3414,40 @@ pub extern "C" fn centered_keyboard_show() {
     {
         crate::platform::ios::show_keyboard();
     }
+    #[cfg(target_os = "android")]
+    {
+        crate::platform::android::show_keyboard();
+    }
 }
 
-/// Hide the software keyboard (iOS only)
+/// Hide the software keyboard
 #[no_mangle]
 pub extern "C" fn centered_keyboard_hide() {
     #[cfg(target_os = "ios")]
     {
         crate::platform::ios::hide_keyboard();
     }
+    #[cfg(target_os = "android")]
+    {
+        crate::platform::android::hide_keyboard();
+    }
 }
 
-/// Check if keyboard is currently visible (iOS only)
+/// Check if keyboard is currently visible
 /// Returns 1 if visible, 0 if hidden
 #[no_mangle]
 pub extern "C" fn centered_keyboard_is_visible() -> i32 {
     #[cfg(target_os = "ios")]
     {
-        if crate::platform::ios::is_keyboard_visible() { 1 } else { 0 }
+        return if crate::platform::ios::is_keyboard_visible() { 1 } else { 0 };
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "android")]
+    {
+        return if crate::platform::android::is_keyboard_visible() { 1 } else { 0 };
+    }
+
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
         0
     }
@@ -3314,7 +3520,26 @@ pub extern "C" fn centered_haptic_feedback(style: i32) {
         }
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "android")]
+    {
+        // Map iOS style codes to Android style codes
+        // Android: 0=Light, 1=Medium, 2=Heavy, 3=Selection, 4=Success, 5=Warning, 6=Error
+        let android_style = match style {
+            0 => 0,  // Light impact
+            1 => 1,  // Medium impact
+            2 => 2,  // Heavy impact
+            3 => 0,  // Soft -> Light
+            4 => 2,  // Rigid -> Heavy
+            10 => 3, // Selection changed
+            20 => 4, // Success
+            21 => 5, // Warning
+            22 => 6, // Error
+            _ => 1,  // Default to medium
+        };
+        crate::platform::android::haptic_feedback(android_style);
+    }
+
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
         let _ = style; // Suppress unused variable warning
     }
@@ -4385,6 +4610,7 @@ pub struct TextMeasurement {
 /// # Safety
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_name must be a valid null-terminated UTF-8 string
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text(
     text: *const c_char,
@@ -4439,6 +4665,77 @@ pub unsafe extern "C" fn centered_measure_text(
             eprintln!("Failed to load font '{}' for measurement: {}", font_name_str, e);
             error_result
         }
+    }
+}
+
+/// Android implementation using JNI Canvas API
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text(
+    text: *const c_char,
+    font_name: *const c_char,
+    font_size: f32,
+) -> TextMeasurement {
+    // Fallback result using character-count heuristic
+    // This ensures layout still works even if JNI measurement fails
+    let make_fallback = |text_str: &str| {
+        // Approximate average character width as 0.5 * font_size for proportional fonts
+        // This is a rough estimate but better than 0
+        let char_count = text_str.chars().count() as f32;
+        let width = char_count * font_size * 0.5;
+        let ascent = font_size * 0.8;
+        let descent = font_size * 0.2;
+        TextMeasurement {
+            width,
+            height: ascent + descent,
+            ascent,
+            descent,
+        }
+    };
+
+    if text.is_null() || font_name.is_null() {
+        return TextMeasurement {
+            width: 0.0,
+            height: font_size,
+            ascent: font_size * 0.8,
+            descent: font_size * 0.2,
+        };
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return make_fallback(""),
+    };
+
+    let font_name_str = match CStr::from_ptr(font_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return make_fallback(text_str),
+    };
+
+    // Measure at logical font size - rendering scales everything proportionally
+    // (positions AND font size), so measurement at logical size gives logical width
+    let descriptor = FontDescriptor::system(font_name_str, 400, FontStyle::Normal, font_size);
+
+    // Use Android text measurement via JNI
+    let width = match crate::text::atlas::android::measure_text_width(text_str, &descriptor) {
+        Some(w) if w > 0.0 => w,
+        _ => {
+            // JNI measurement failed - use fallback
+            log::warn!("Android text measurement failed for '{}', using fallback", text_str);
+            return make_fallback(text_str);
+        }
+    };
+
+    // Approximate height based on font size (proper metrics would require more JNI calls)
+    let ascent = font_size * 0.8;
+    let descent = font_size * 0.2;
+    let height = ascent + descent;
+
+    TextMeasurement {
+        width,
+        height,
+        ascent,
+        descent,
     }
 }
 
@@ -4519,6 +4816,7 @@ pub unsafe extern "C" fn centered_measure_text_width(
 /// # Safety
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_name must be a valid null-terminated UTF-8 string
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_to_cursor(
     text: *const c_char,
@@ -4653,6 +4951,75 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
 
     // Convert back to logical pixels
     width / scale_factor
+}
+
+// Android implementations for text measurement using JNI Canvas API
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_to_cursor(
+    text: *const c_char,
+    char_index: u32,
+    font_name: *const c_char,
+    font_size: f32,
+) -> f32 {
+    if text.is_null() || font_name.is_null() {
+        return 0.0;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    let font_name_str = match CStr::from_ptr(font_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Measure at logical font size - rendering scales everything proportionally
+    let descriptor = FontDescriptor::system(font_name_str, 400, FontStyle::Normal, font_size);
+
+    // Use Android text measurement via JNI
+    crate::text::atlas::android::measure_text_to_cursor(text_str, char_index as usize, &descriptor)
+        .unwrap_or(0.0)
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_with_font(
+    text: *const c_char,
+    font_json: *const c_char,
+) -> f32 {
+    if text.is_null() || font_json.is_null() {
+        return 0.0;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    if text_str.is_empty() {
+        return 0.0;
+    }
+
+    let font_json_str = match CStr::from_ptr(font_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Parse the font descriptor from JSON
+    let descriptor: FontDescriptor = match serde_json::from_str(font_json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to parse font descriptor JSON: {}", e);
+            return 0.0;
+        }
+    };
+
+    // Measure at logical font size - rendering scales everything proportionally
+    crate::text::atlas::android::measure_text_width(text_str, &descriptor)
+        .unwrap_or(0.0)
 }
 
 // ============================================================================

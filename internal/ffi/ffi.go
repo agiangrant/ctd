@@ -135,6 +135,9 @@ var (
 	fnIosSetReadyCallback func(callback uintptr)
 	fnIosMain             func(argc int32, argv uintptr) int32
 
+	// Android-specific functions (only loaded on Android)
+	fnAndroidSetReadyCallback func(callback uintptr)
+
 	// Clipboard functions (Rust implementation)
 	fnClipboardGet func() uintptr
 	fnClipboardSet func(text uintptr)
@@ -318,6 +321,7 @@ func initLibrary() error {
 		// Register all function pointers
 		registerCoreFunctions()
 		registerIOSFunctions()
+		registerAndroidFunctions()
 		registerImageFunctions()
 		registerTextFunctions()
 		registerAudioFunctions()
@@ -354,6 +358,13 @@ func registerIOSFunctions() {
 	}
 	purego.RegisterLibFunc(&fnIosSetReadyCallback, libHandle, "centered_ios_set_ready_callback")
 	purego.RegisterLibFunc(&fnIosMain, libHandle, "centered_ios_main")
+}
+
+func registerAndroidFunctions() {
+	if runtime.GOOS != "android" {
+		return
+	}
+	purego.RegisterLibFunc(&fnAndroidSetReadyCallback, libHandle, "centered_android_set_ready_callback")
 }
 
 func registerImageFunctions() {
@@ -855,6 +866,10 @@ var (
 	// iOS-specific state
 	iosReadyCallbackPtr uintptr
 	iosStoredConfig     *AppConfig
+
+	// Android-specific state
+	androidReadyCallbackPtr uintptr
+	androidStoredConfig     *AppConfig
 )
 
 // appCallback is the callback function called from Rust
@@ -1010,6 +1025,80 @@ func runIOS(config AppConfig) error {
 	return nil
 }
 
+// androidReadyCallback is called by Rust when the Android app is ready (after window init).
+// This function then calls fnAppRun to register the event callback with the Android backend.
+func androidReadyCallback() {
+	log.Println("[FFI] Android app ready, registering event callback")
+
+	config := androidStoredConfig
+	if config == nil {
+		log.Println("[FFI] ERROR: androidStoredConfig is nil")
+		return
+	}
+
+	// Create callback
+	callbackPtr = purego.NewCallback(appCallback)
+
+	// Prepare config struct
+	titleBytes := append([]byte(config.Title), 0)
+	titlePtr := uintptr(unsafe.Pointer(&titleBytes[0]))
+
+	cConfig := AppConfigC{
+		Title:                 titlePtr,
+		Width:                 config.Width,
+		Height:                config.Height,
+		VSync:                 config.VSync,
+		LowPowerGPU:           config.LowPowerGPU,
+		AllowSoftwareFallback: config.AllowSoftwareFallback,
+		Resizable:             config.Resizable,
+		AlwaysOnTop:           config.AlwaysOnTop,
+		MinWidth:              config.MinWidth,
+		MinHeight:             config.MinHeight,
+		MaxWidth:              config.MaxWidth,
+		MaxHeight:             config.MaxHeight,
+		X:                     config.X,
+		Y:                     config.Y,
+		CornerRadius:          config.CornerRadius,
+		ShowNativeControls:    config.ShowNativeControls,
+		EnableMinimize:        config.EnableMinimize,
+		EnableMaximize:        config.EnableMaximize,
+	}
+
+	// Keep titleBytes alive
+	runtime.KeepAlive(titleBytes)
+
+	// Register callback with Android backend
+	result := fnAppRun(uintptr(unsafe.Pointer(&cConfig)), callbackPtr)
+	if result != 0 {
+		log.Printf("[FFI] ERROR: fnAppRun returned %d", result)
+	}
+}
+
+// runAndroid handles the Android-specific startup flow.
+// On Android, Rust owns the android-activity event loop. The flow is:
+// 1. Store config for later use by the ready callback
+// 2. Register Go's ready callback with Rust
+// 3. Block forever (event loop runs in Rust's android_main)
+// 4. When Android window is ready, Rust calls our androidReadyCallback
+// 5. androidReadyCallback calls fnAppRun to register the event handler
+func runAndroid(config AppConfig) error {
+	log.Println("[FFI] Running Android app")
+
+	// Store config for the ready callback to use later
+	androidStoredConfig = &config
+
+	// Create and register the ready callback
+	androidReadyCallbackPtr = purego.NewCallback(androidReadyCallback)
+	fnAndroidSetReadyCallback(androidReadyCallbackPtr)
+
+	log.Println("[FFI] Android ready callback registered, waiting for window init...")
+
+	// On Android, the event loop is already running in Rust's android_main.
+	// We just need to block here to keep the goroutine alive.
+	// The callback will be invoked from Rust when the window is ready.
+	select {}
+}
+
 // ============================================================================
 // Core Functions
 // ============================================================================
@@ -1041,6 +1130,11 @@ func Run(config AppConfig, handler EventHandler) error {
 	// iOS has a different startup flow
 	if runtime.GOOS == "ios" {
 		return runIOS(config)
+	}
+
+	// Android has a different startup flow (similar to iOS)
+	if runtime.GOOS == "android" {
+		return runAndroid(config)
 	}
 
 	// Desktop path (macOS, Windows, Linux) - uses winit

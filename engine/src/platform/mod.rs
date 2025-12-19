@@ -14,9 +14,12 @@ pub mod wgpu_backend;
 pub mod window_styling;
 
 // Native platform backends (bypassing winit)
-// Currently only iOS uses this - desktop uses winit
+// Currently iOS and Android use native backends - desktop uses winit
 #[cfg(target_os = "ios")]
 pub mod ios;
+
+#[cfg(target_os = "android")]
+pub mod android;
 
 // macOS native backend - kept for reference but not used (winit works fine on macOS)
 // Uncomment to use direct AppKit instead of winit
@@ -28,6 +31,9 @@ pub use backend::{AppConfig, EventCallback, EventResponse, PlatformBackend, Plat
 pub use wgpu_backend::{SurfaceConfig, WgpuBackend};
 pub use window_styling::{apply_window_style, WindowStyleOptions};
 
-// Platform-specific backend alias (only iOS uses native backend, others use winit)
+// Platform-specific backend alias (iOS and Android use native backends, others use winit)
 #[cfg(target_os = "ios")]
 pub use ios::IosBackend as NativeBackend;
+
+#[cfg(target_os = "android")]
+pub use android::AndroidBackend as NativeBackend;

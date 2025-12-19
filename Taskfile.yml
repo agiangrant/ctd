@@ -2,6 +2,11 @@ version: '3'
 
 vars:
   ENGINE_DIR: ./engine
+  # Android NDK configuration
+  # Override with ANDROID_NDK_HOME environment variable if different
+  ANDROID_NDK_HOME:
+    sh: echo "${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/26.1.10909125}"
+  ANDROID_NDK_TOOLCHAIN: '{{.ANDROID_NDK_HOME}}/toolchains/llvm/prebuilt/darwin-x86_64/bin'
 
 tasks:
   default:
@@ -164,3 +169,76 @@ tasks:
         xcrun simctl install booted "$APP_BUNDLE"
         echo "Launching app..."
         xcrun simctl launch --console booted {{.BUNDLE_ID}}
+
+  # Android tasks
+  android:build:
+    desc: Build Rust engine for Android device (aarch64-linux-android)
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - rustup target add aarch64-linux-android 2>/dev/null || true
+      - PATH="{{.ANDROID_NDK_TOOLCHAIN}}:$PATH" cargo build --release --lib --target aarch64-linux-android
+
+  android:build:sim:
+    desc: Build Rust engine for Android emulator (x86_64-linux-android)
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - rustup target add x86_64-linux-android 2>/dev/null || true
+      - PATH="{{.ANDROID_NDK_TOOLCHAIN}}:$PATH" cargo build --release --lib --target x86_64-linux-android
+
+  android:build:all:
+    desc: Build Rust engine for all Android targets (arm64, armv7, x86_64)
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android 2>/dev/null || true
+      - PATH="{{.ANDROID_NDK_TOOLCHAIN}}:$PATH" cargo build --release --lib --target aarch64-linux-android
+      - PATH="{{.ANDROID_NDK_TOOLCHAIN}}:$PATH" cargo build --release --lib --target armv7-linux-androideabi
+      - PATH="{{.ANDROID_NDK_TOOLCHAIN}}:$PATH" cargo build --release --lib --target x86_64-linux-android
+
+  android:framework:
+    desc: Build Android AAR with gomobile (rebuilds Go code for Android)
+    dir: examples/android_demo
+    cmds:
+      - echo "Building Android AAR with gomobile..."
+      - mkdir -p app/libs
+      - PATH="$HOME/go/bin:$PATH" gomobile bind -target android/arm64 -androidapi 24 -o app/libs/centered_go.aar .
+      - echo "AAR built at examples/android_demo/app/libs/centered_go.aar"
+
+  android:clean:
+    desc: Clean Android build artifacts
+    cmds:
+      - rm -rf {{.ENGINE_DIR}}/target/aarch64-linux-android
+      - rm -rf {{.ENGINE_DIR}}/target/armv7-linux-androideabi
+      - rm -rf {{.ENGINE_DIR}}/target/x86_64-linux-android
+      - rm -rf examples/android_demo/app/build
+      - rm -rf examples/android_demo/app/libs/*.aar
+      - rm -rf examples/android_demo/app/src/main/jniLibs
+      - echo "Android build artifacts cleaned"
+
+  android:rebuild:
+    desc: Full rebuild of Android demo (framework + clean)
+    cmds:
+      - task: android:framework
+      - task: android:clean
+      - echo "Android demo rebuilt. Run 'task android:run' to build and install."
+
+  android:run:
+    desc: Build, deploy and run Android demo on device/emulator
+    vars:
+      BUNDLE_ID: com.centered.demo
+    cmds:
+      - task: android:build
+      - |
+        echo "Copying .so to jniLibs..."
+        mkdir -p examples/android_demo/app/src/main/jniLibs/arm64-v8a
+        cp {{.ENGINE_DIR}}/target/aarch64-linux-android/release/libcentered_engine.so examples/android_demo/app/src/main/jniLibs/arm64-v8a/
+      - |
+        echo "Building and installing APK..."
+        cd examples/android_demo && ./gradlew installDebug
+      - |
+        echo "Launching app..."
+        adb shell am start -n {{.BUNDLE_ID}}/.CenteredActivity
+
+  android:logcat:
+    desc: Show Android logcat filtered for Centered
+    cmds:
+      - adb logcat -s Centered:V centered_engine:V AndroidRuntime:E

@@ -1,13 +1,13 @@
 //! Platform backend trait for cross-platform window/event management
 //!
-//! Each platform (macOS, iOS, Windows, Linux) implements this trait to handle:
+//! Each platform (macOS, iOS, Windows, Linux, Android) implements this trait to handle:
 //! - Window/view creation and lifecycle
 //! - Event loop management
 //! - Surface creation for wgpu rendering
 //! - Input events (touch, mouse, keyboard)
 //!
 //! This replaces winit with direct platform APIs for better control,
-//! especially on iOS where UIKit lifecycle management is critical.
+//! especially on mobile where native lifecycle management is critical.
 
 use std::error::Error;
 
@@ -139,6 +139,7 @@ pub trait PlatformBackend: Sized {
 /// On iOS: UIWindow/UIView with CAMetalLayer
 /// On Windows: HWND
 /// On Linux: X11 Window or Wayland surface
+/// On Android: ANativeWindow
 pub struct NativeHandle {
     /// Raw window handle for wgpu
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -151,6 +152,9 @@ pub struct NativeHandle {
     pub window: u64,
     #[cfg(target_os = "linux")]
     pub display: *mut std::ffi::c_void,
+
+    #[cfg(target_os = "android")]
+    pub a_native_window: *mut std::ffi::c_void,
 }
 
 // SAFETY: NativeHandle contains raw pointers that are only used to create wgpu surfaces.
@@ -192,6 +196,14 @@ impl raw_window_handle::HasWindowHandle for NativeHandle {
             let handle = raw_window_handle::XlibWindowHandle::new(self.window);
             Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(handle.into()) })
         }
+
+        #[cfg(target_os = "android")]
+        {
+            let handle = raw_window_handle::AndroidNdkWindowHandle::new(
+                std::ptr::NonNull::new(self.a_native_window).unwrap()
+            );
+            Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(handle.into()) })
+        }
     }
 }
 
@@ -221,6 +233,12 @@ impl raw_window_handle::HasDisplayHandle for NativeHandle {
                 std::ptr::NonNull::new(self.display),
                 0, // screen number
             );
+            Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(handle.into()) })
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            let handle = raw_window_handle::AndroidDisplayHandle::new();
             Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(handle.into()) })
         }
     }

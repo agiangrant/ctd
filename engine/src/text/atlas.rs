@@ -18,6 +18,12 @@ mod macos;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use macos::MacOSGlyphRasterizer;
 
+// Android uses Canvas/Paint via JNI for native font rendering
+#[cfg(target_os = "android")]
+pub mod android;
+#[cfg(target_os = "android")]
+pub use android::AndroidGlyphRasterizer;
+
 /// Unique identifier for a glyph in the atlas
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
@@ -479,11 +485,14 @@ pub trait GlyphRasterizer {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type PlatformGlyphRasterizer = MacOSGlyphRasterizer;
 
-// Stub rasterizer for unsupported platforms
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "android")]
+pub type PlatformGlyphRasterizer = AndroidGlyphRasterizer;
+
+// Stub rasterizer for unsupported platforms (Windows, Linux, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub use stub::StubGlyphRasterizer as PlatformGlyphRasterizer;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 mod stub {
     use super::*;
 

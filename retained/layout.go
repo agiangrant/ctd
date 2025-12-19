@@ -1419,13 +1419,22 @@ func layoutChildren(
 			// Get text width for width calculation
 			textW := info.widget.TextWidth()
 
-			// For Text widgets in VStack, they should fill the width and wrap
-			// In HStack, they take their natural width
-			if info.kind == KindText && childWidth == 0 && !isMainAxisHorizontal {
-				// In VStack, text widgets fill parent width
-				childWidth = contentWidth
+			// Text widget width depends on parent context:
+			// - In VStack or Container: fill parent width (enables text wrapping)
+			// - In HStack: use intrinsic text width (so siblings get their share)
+			if info.kind == KindText && childWidth == 0 {
+				if !isMainAxisHorizontal && contentWidth > 0 {
+					// VStack or vertical Container: fill parent width for wrapping
+					childWidth = contentWidth
+				} else if parentKind == KindContainer && contentWidth > 0 {
+					// Container (even horizontal): Text should fill it for wrapping
+					childWidth = contentWidth
+				} else {
+					// HStack: use intrinsic text width
+					childWidth = textW + info.padding[1] + info.padding[3]
+				}
 			} else if childWidth == 0 {
-				// In HStack or explicit width, use measured text width
+				// Non-text widgets use measured text width for buttons
 				childWidth = textW + info.padding[1] + info.padding[3]
 			}
 

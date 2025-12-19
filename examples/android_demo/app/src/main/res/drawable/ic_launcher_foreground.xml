@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple "C" for Centered -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 C35,30 24,42 24,54 C24,66 35,78 54,78 C63,78 70,74 75,68 L68,61 C65,65 60,68 54,68 C41,68 34,60 34,54 C34,48 41,40 54,40 C60,40 65,43 68,47 L75,40 C70,34 63,30 54,30 Z" />
+</vector>

@@ -6,6 +6,7 @@ struct VertexInput {
     @location(0) position: vec2<f32>,
     @location(1) tex_coords: vec2<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) use_texture_color: f32, // Unused for images, but required for vertex layout compatibility
 }
 
 struct VertexOutput {

@@ -23,6 +23,12 @@ pub mod macos;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod macos_input;
 
+// Android uses JNI to access platform audio APIs
+#[cfg(target_os = "android")]
+pub mod android;
+#[cfg(target_os = "android")]
+pub mod android_input;
+
 use std::error::Error;
 use std::fmt;
 

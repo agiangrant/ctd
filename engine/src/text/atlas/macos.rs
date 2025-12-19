@@ -19,6 +19,37 @@ use core_text::string_attributes;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Check if a character is an emoji (should render with native colors, not white)
+fn is_emoji(c: char) -> bool {
+    let cp = c as u32;
+    matches!(cp,
+        // Emoticons
+        0x1F600..=0x1F64F |
+        // Miscellaneous Symbols and Pictographs
+        0x1F300..=0x1F5FF |
+        // Transport and Map Symbols
+        0x1F680..=0x1F6FF |
+        // Supplemental Symbols and Pictographs
+        0x1F900..=0x1F9FF |
+        // Symbols and Pictographs Extended-A
+        0x1FA00..=0x1FA6F |
+        // Symbols and Pictographs Extended-B
+        0x1FA70..=0x1FAFF |
+        // Dingbats
+        0x2700..=0x27BF |
+        // Miscellaneous Symbols
+        0x2600..=0x26FF |
+        // Regional Indicator Symbols (flags)
+        0x1F1E0..=0x1F1FF |
+        // Skin tone modifiers
+        0x1F3FB..=0x1F3FF |
+        // Additional common emoji ranges
+        0x1F400..=0x1F4FF |
+        // Musical/activity symbols that are often emoji
+        0x1F3A0..=0x1F3FF
+    )
+}
+
 // Core Text types and functions not exposed by core-text crate
 type CTFontRef = *const std::ffi::c_void;
 type CTFontSymbolicTraits = u32;
@@ -287,16 +318,15 @@ impl MacOSGlyphRasterizer {
         }
     }
 
-    /// Create an attributed string with the font and white foreground color
-    fn create_attributed_string(&self, text: &str, ct_font: &CTFont) -> CFMutableAttributedString {
+    /// Create an attributed string with the font
+    /// If `set_white_color` is true, sets foreground color to white (for regular text tinting)
+    /// If false, leaves color unset to allow color emoji rendering
+    fn create_attributed_string(&self, text: &str, ct_font: &CTFont, set_white_color: bool) -> CFMutableAttributedString {
         let cf_string = CFString::new(text);
         let mut attr_string = CFMutableAttributedString::new();
         attr_string.replace_str(&cf_string, CFRange::init(0, 0));
 
         let string_range = CFRange::init(0, cf_string.char_len() as isize);
-
-        // Create white color for the text
-        let white_color = CGColor::rgb(1.0, 1.0, 1.0, 1.0);
 
         unsafe {
             // Set font attribute
@@ -306,13 +336,16 @@ impl MacOSGlyphRasterizer {
                 ct_font,
             );
 
-            // Set foreground color attribute to white
-            // This is critical - Core Text ignores CGContext fill color
-            attr_string.set_attribute(
-                string_range,
-                string_attributes::kCTForegroundColorAttributeName,
-                &white_color,
-            );
+            // Only set foreground color for non-emoji text
+            // Emojis need to render with their native colors from Apple Color Emoji font
+            if set_white_color {
+                let white_color = CGColor::rgb(1.0, 1.0, 1.0, 1.0);
+                attr_string.set_attribute(
+                    string_range,
+                    string_attributes::kCTForegroundColorAttributeName,
+                    &white_color,
+                );
+            }
         }
 
         attr_string
@@ -331,8 +364,8 @@ impl MacOSGlyphRasterizer {
             None => return 0.0,
         };
 
-        // Create attributed string for the text
-        let attr_string = self.create_attributed_string(text, &ct_font);
+        // Create attributed string for the text (color doesn't affect measurement)
+        let attr_string = self.create_attributed_string(text, &ct_font, true);
 
         // Create CTLine and get typographic bounds
         let line = CTLine::new_with_attributed_string(attr_string.as_concrete_TypeRef());
@@ -354,7 +387,7 @@ impl GlyphRasterizer for MacOSGlyphRasterizer {
         // Handle whitespace characters - no visual glyph needed
         if character.is_whitespace() {
             let char_string = character.to_string();
-            let attr_string = self.create_attributed_string(&char_string, &ct_font);
+            let attr_string = self.create_attributed_string(&char_string, &ct_font, true);
             let line = CTLine::new_with_attributed_string(attr_string.as_concrete_TypeRef());
             let bounds = line.get_typographic_bounds();
 
@@ -369,8 +402,10 @@ impl GlyphRasterizer for MacOSGlyphRasterizer {
         }
 
         // Create attributed string for this character
+        // For emojis, don't set white color so they render with native colors
         let char_string = character.to_string();
-        let attr_string = self.create_attributed_string(&char_string, &ct_font);
+        let char_is_emoji = is_emoji(character);
+        let attr_string = self.create_attributed_string(&char_string, &ct_font, !char_is_emoji);
 
         // Create CTLine
         let line = CTLine::new_with_attributed_string(attr_string.as_concrete_TypeRef());
@@ -412,7 +447,11 @@ impl GlyphRasterizer for MacOSGlyphRasterizer {
         );
 
         // Set text drawing mode
-        context.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0); // White text
+        // Note: Core Text uses the attributed string's kCTForegroundColorAttributeName,
+        // not the CGContext fill color. We set it anyway for consistency.
+        if !char_is_emoji {
+            context.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0); // White for regular text
+        }
         context.set_text_drawing_mode(core_graphics::context::CGTextDrawingMode::CGTextFill);
 
         // Position and draw the line
