@@ -977,7 +977,7 @@ func (l *Loop) tick() ffi.FrameResponse {
 	hasMomentumScrolling := l.events.UpdateMomentumScroll()
 
 	// Update cursor blink for focused text input widgets
-	hasTextInputFocused := l.updateCursorBlink()
+	cursorBlinkChanged, msUntilNextBlink := l.updateCursorBlink()
 
 	// Check if any video or audio is playing or streaming (needs continuous redraws)
 	// Consolidated into single tree traversal for efficiency
@@ -1025,25 +1025,35 @@ func (l *Loop) tick() ffi.FrameResponse {
 	// Determine if we need to keep requesting redraws:
 	// - Active animations need continuous 60 FPS
 	// - User's onFrame callback with immediate draws needs continuous updates
-	// - Focused text input needs redraws for cursor blink animation
+	// - Cursor blink changed (include in this frame)
 	// - Playing videos/audio need continuous frame updates for time tracking
 	// - Streaming video (receiving live frames) needs continuous updates
 	// - Otherwise, only redraw when something changes (events will trigger redraws)
 	hasImmediateDraws := len(frame.immediateCommands) > 0
-	needsContinuousRedraw := hasActiveAnimations || hasMomentumScrolling || hasTextInputFocused || hasPlayingVideo || hasPlayingAudio || hasStreamingVideo || (l.onFrame != nil && hasImmediateDraws)
+	needsContinuousRedraw := hasActiveAnimations || hasMomentumScrolling || cursorBlinkChanged || hasPlayingVideo || hasPlayingAudio || hasStreamingVideo || (l.onFrame != nil && hasImmediateDraws)
+
+	// For cursor blink, use delayed redraw instead of continuous polling
+	// This allows CPU to sleep between blinks instead of running at 60 FPS
+	var redrawAfterMs uint32
+	if !needsContinuousRedraw && msUntilNextBlink > 0 {
+		redrawAfterMs = msUntilNextBlink
+	}
 
 	return ffi.FrameResponse{
 		ImmediateCommands: commands,
 		RequestRedraw:     needsContinuousRedraw,
+		RedrawAfterMs:     redrawAfterMs,
 	}
 }
 
 // updateCursorBlink updates the cursor blink state for focused text input widgets.
-// Returns true if a text input widget is focused (to trigger continuous redraws).
-func (l *Loop) updateCursorBlink() bool {
+// Returns:
+// - blinkChanged: true if the cursor visibility actually toggled (requires redraw)
+// - msUntilNextBlink: milliseconds until next blink toggle (0 if no text input focused)
+func (l *Loop) updateCursorBlink() (blinkChanged bool, msUntilNextBlink uint32) {
 	focused := l.events.FocusedWidget()
 	if focused == nil {
-		return false
+		return false, 0
 	}
 
 	// Check if focused widget is a text input
@@ -1053,12 +1063,23 @@ func (l *Loop) updateCursorBlink() bool {
 	focused.mu.RUnlock()
 
 	if textBuffer == nil || (kind != KindTextField && kind != KindTextArea) {
-		return false
+		return false, 0
 	}
 
-	// Update blink state
-	textBuffer.UpdateBlink()
-	return true
+	// Update blink state - returns true when visibility actually toggled
+	blinkChanged = textBuffer.UpdateBlink()
+
+	// Calculate time until next blink
+	timeUntilBlink := textBuffer.TimeUntilNextBlink()
+	if timeUntilBlink > 0 {
+		msUntilNextBlink = uint32(timeUntilBlink.Milliseconds())
+		// Ensure at least 1ms to avoid busy loop
+		if msUntilNextBlink == 0 {
+			msUntilNextBlink = 1
+		}
+	}
+
+	return blinkChanged, msUntilNextBlink
 }
 
 // hasPlayingMedia checks if any video or audio widget in the tree is currently playing or streaming.

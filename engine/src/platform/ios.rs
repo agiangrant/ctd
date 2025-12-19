@@ -43,6 +43,37 @@ thread_local! {
     // Keyboard notification observers (must be kept alive)
     static KEYBOARD_SHOW_OBSERVER: RefCell<Option<Retained<NSObject>>> = RefCell::new(None);
     static KEYBOARD_HIDE_OBSERVER: RefCell<Option<Retained<NSObject>>> = RefCell::new(None);
+    // Timer for delayed redraws (cursor blink, etc.)
+    static IOS_REDRAW_TIMER: RefCell<Option<Retained<AnyObject>>> = RefCell::new(None);
+    // Whether continuous rendering is active (display link running)
+    static CONTINUOUS_RENDER: RefCell<bool> = RefCell::new(true);
+    // Track if we've rendered at least one frame (prevents going idle before first render)
+    static HAS_RENDERED_FRAME: RefCell<bool> = RefCell::new(false);
+    // Grace period - keep rendering until this time (allows async ops like video to start)
+    static RENDER_UNTIL: RefCell<Option<std::time::Instant>> = RefCell::new(None);
+    // Target frames per second (configured at app init)
+    static TARGET_FPS: RefCell<u32> = RefCell::new(60);
+}
+
+/// Set the target FPS for the render loop
+pub fn set_target_fps(fps: u32) {
+    let fps = fps.max(1); // Minimum 1 FPS
+    TARGET_FPS.with(|f| *f.borrow_mut() = fps);
+
+    // Update the display link's preferred frame rate if it exists
+    IOS_DISPLAY_LINK.with(|dl| {
+        if let Some(ref display_link) = *dl.borrow() {
+            unsafe {
+                // preferredFramesPerSecond is available on iOS 10+
+                let _: () = msg_send![&**display_link, setPreferredFramesPerSecond: fps as i64];
+            }
+        }
+    });
+}
+
+/// Get the target FPS
+pub fn get_target_fps() -> u32 {
+    TARGET_FPS.with(|f| *f.borrow())
 }
 
 // C callback type for Go's ready handler
@@ -214,13 +245,17 @@ declare_class!(
                 scale_factor: scale,
             });
 
-            if response.request_redraw {
-                self.set_needs_display();
-            }
+            handle_event_response(&response);
         }
 
         #[method(touchesBegan:withEvent:)]
         fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+            // Extend grace period for touch events - allows async ops like video to start
+            let grace_duration = std::time::Duration::from_millis(500);
+            RENDER_UNTIL.with(|r| {
+                *r.borrow_mut() = Some(std::time::Instant::now() + grace_duration);
+            });
+
             for touch in touches.iter() {
                 let location = touch.locationInView(Some(self));
                 let touch_id = touch as *const UITouch as u64;
@@ -229,9 +264,7 @@ declare_class!(
                     x: location.x,
                     y: location.y,
                 });
-                if response.request_redraw {
-                    self.set_needs_display();
-                }
+                handle_event_response(&response);
             }
         }
 
@@ -245,14 +278,18 @@ declare_class!(
                     x: location.x,
                     y: location.y,
                 });
-                if response.request_redraw {
-                    self.set_needs_display();
-                }
+                handle_event_response(&response);
             }
         }
 
         #[method(touchesEnded:withEvent:)]
         fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+            // Extend grace period for touch end events (button releases, etc.)
+            let grace_duration = std::time::Duration::from_millis(500);
+            RENDER_UNTIL.with(|r| {
+                *r.borrow_mut() = Some(std::time::Instant::now() + grace_duration);
+            });
+
             for touch in touches.iter() {
                 let location = touch.locationInView(Some(self));
                 let touch_id = touch as *const UITouch as u64;
@@ -261,9 +298,7 @@ declare_class!(
                     x: location.x,
                     y: location.y,
                 });
-                if response.request_redraw {
-                    self.set_needs_display();
-                }
+                handle_event_response(&response);
             }
         }
 
@@ -277,9 +312,7 @@ declare_class!(
                     x: location.x,
                     y: location.y,
                 });
-                if response.request_redraw {
-                    self.set_needs_display();
-                }
+                handle_event_response(&response);
             }
         }
 
@@ -318,8 +351,57 @@ declare_class!(
         // CADisplayLink target method
         #[method(displayLinkFired:)]
         fn display_link_fired(&self, _display_link: *mut AnyObject) {
-            // Send RedrawRequested event to Go callback
-            let _response = send_event(PlatformEvent::RedrawRequested);
+            // Check if we've already rendered a frame BEFORE this render
+            // This ensures we don't go idle until after at least one full frame
+            let was_rendered_before = HAS_RENDERED_FRAME.with(|h| *h.borrow());
+
+            // Check if we're within a grace period (keeps rendering for async ops)
+            let in_grace_period = RENDER_UNTIL.with(|r| {
+                r.borrow().map(|until| std::time::Instant::now() < until).unwrap_or(false)
+            });
+
+            // Send RedrawRequested event to Go callback (this triggers rendering)
+            let response = send_event(PlatformEvent::RedrawRequested);
+
+            // Mark that we've now rendered at least one frame
+            HAS_RENDERED_FRAME.with(|h| *h.borrow_mut() = true);
+
+            // Handle rendering mode based on response
+            // Only allow going idle if:
+            // - We've rendered at least one frame before
+            // - We're not within a grace period (for async ops like video)
+            if !response.request_redraw && was_rendered_before && !in_grace_period {
+                // No continuous rendering needed
+                if response.redraw_after_ms > 0 {
+                    // Schedule a delayed redraw for cursor blink, etc.
+                    pause_display_link();
+                    schedule_delayed_redraw(response.redraw_after_ms);
+                } else {
+                    // Nothing to do, pause rendering
+                    pause_display_link();
+                }
+            }
+            // If request_redraw is true, OR first frame, OR in grace period, keep display link running
+        }
+
+        // Timer callback for delayed redraws (cursor blink)
+        #[method(timerFired:)]
+        fn timer_fired(&self, _timer: *mut AnyObject) {
+            // Clear the timer reference
+            IOS_REDRAW_TIMER.with(|t| *t.borrow_mut() = None);
+
+            // Send RedrawRequested event
+            let response = send_event(PlatformEvent::RedrawRequested);
+
+            // Handle response like display_link_fired
+            if response.request_redraw {
+                // Need continuous rendering, resume display link
+                resume_display_link();
+            } else if response.redraw_after_ms > 0 {
+                // Schedule another delayed redraw
+                schedule_delayed_redraw(response.redraw_after_ms);
+            }
+            // Otherwise, stay paused until an event triggers a redraw
         }
 
         // Hardware keyboard support - pressesBegan
@@ -480,6 +562,43 @@ impl MetalView {
     }
 }
 
+/// Handle event response - resume display link if continuous rendering needed
+fn handle_event_response(response: &EventResponse) {
+    if response.request_redraw {
+        // Need continuous rendering for animations, scrolling, etc.
+        resume_display_link();
+    } else if response.redraw_after_ms > 0 {
+        // Need a delayed redraw (cursor blink, etc.)
+        // If display link is paused, schedule a timer
+        CONTINUOUS_RENDER.with(|cr| {
+            if !*cr.borrow() {
+                schedule_delayed_redraw(response.redraw_after_ms);
+            }
+        });
+    }
+}
+
+/// Extend the render grace period - keeps rendering for a short while
+/// to allow async operations (video playback, network loads) to start
+fn extend_render_grace_period() {
+    let grace_duration = std::time::Duration::from_millis(500); // 500ms grace period
+    let new_until = std::time::Instant::now() + grace_duration;
+    RENDER_UNTIL.with(|r| {
+        let current = r.borrow().unwrap_or(std::time::Instant::now());
+        // Only extend if new time is later
+        if new_until > current {
+            *r.borrow_mut() = Some(new_until);
+        }
+    });
+}
+
+/// Check if we're within the render grace period
+fn is_within_grace_period() -> bool {
+    RENDER_UNTIL.with(|r| {
+        r.borrow().map(|until| std::time::Instant::now() < until).unwrap_or(false)
+    })
+}
+
 // ============================================================================
 // DisplayLinkHandler - receives CADisplayLink callbacks
 // ============================================================================
@@ -529,6 +648,12 @@ fn start_display_link(_mtm: MainThreadMarker) {
                 ]
             };
 
+            // Set the preferred frame rate based on target FPS config
+            let target_fps = TARGET_FPS.with(|f| *f.borrow());
+            unsafe {
+                let _: () = msg_send![&*display_link, setPreferredFramesPerSecond: target_fps as i64];
+            }
+
             // Add to main run loop - use currentRunLoop and common modes
             let current_run_loop: *mut AnyObject = unsafe { msg_send![class!(NSRunLoop), currentRunLoop] };
 
@@ -543,6 +668,72 @@ fn start_display_link(_mtm: MainThreadMarker) {
             // Store to keep alive
             IOS_DISPLAY_LINK.with(|dl| *dl.borrow_mut() = Some(display_link));
         }
+    });
+}
+
+/// Pause the display link to stop continuous rendering
+fn pause_display_link() {
+    CONTINUOUS_RENDER.with(|cr| {
+        if *cr.borrow() {
+            *cr.borrow_mut() = false;
+            IOS_DISPLAY_LINK.with(|dl| {
+                if let Some(ref display_link) = *dl.borrow() {
+                    let _: () = unsafe { msg_send![&**display_link, setPaused: true] };
+                }
+            });
+        }
+    });
+}
+
+/// Resume the display link for continuous rendering
+fn resume_display_link() {
+    CONTINUOUS_RENDER.with(|cr| {
+        if !*cr.borrow() {
+            *cr.borrow_mut() = true;
+            // Cancel any pending timer
+            cancel_delayed_redraw();
+            IOS_DISPLAY_LINK.with(|dl| {
+                if let Some(ref display_link) = *dl.borrow() {
+                    let _: () = unsafe { msg_send![&**display_link, setPaused: false] };
+                }
+            });
+        }
+    });
+}
+
+/// Schedule a one-shot redraw after the specified milliseconds
+fn schedule_delayed_redraw(ms: u32) {
+    // Cancel any existing timer
+    cancel_delayed_redraw();
+
+    // Create an NSTimer for the delayed redraw
+    let seconds = ms as f64 / 1000.0;
+
+    IOS_VIEW.with(|v| {
+        if let Some(ref view) = *v.borrow() {
+            // Create timer targeting the view's timerFired: method
+            let timer: Retained<AnyObject> = unsafe {
+                msg_send_id![
+                    class!(NSTimer),
+                    scheduledTimerWithTimeInterval: seconds,
+                    target: &**view,
+                    selector: sel!(timerFired:),
+                    userInfo: std::ptr::null::<AnyObject>(),
+                    repeats: false
+                ]
+            };
+            IOS_REDRAW_TIMER.with(|t| *t.borrow_mut() = Some(timer));
+        }
+    });
+}
+
+/// Cancel any pending delayed redraw timer
+fn cancel_delayed_redraw() {
+    IOS_REDRAW_TIMER.with(|t| {
+        if let Some(ref timer) = *t.borrow() {
+            let _: () = unsafe { msg_send![&**timer, invalidate] };
+        }
+        *t.borrow_mut() = None;
     });
 }
 
@@ -711,12 +902,16 @@ declare_class!(
                 scale_factor: scale,
             });
 
-            if response.request_redraw {
-                metal_view.set_needs_display();
-            }
+            handle_event_response(&response);
 
             // Start the display link for continuous rendering
             start_display_link(mtm);
+
+            // Set a longer grace period on startup (1 second) to allow
+            // videos and other async content to load
+            RENDER_UNTIL.with(|r| {
+                *r.borrow_mut() = Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+            });
 
             // Set up keyboard show/hide observers for keyboard avoidance
             setup_keyboard_observers();
@@ -727,12 +922,9 @@ declare_class!(
         #[method(applicationDidBecomeActive:)]
         fn did_become_active(&self, _application: &UIApplication) {
             let response = send_event(PlatformEvent::Resumed);
+            // Always resume display link when app becomes active
             if response.request_redraw {
-                IOS_VIEW.with(|v| {
-                    if let Some(ref view) = *v.borrow() {
-                        view.set_needs_display();
-                    }
-                });
+                resume_display_link();
             }
         }
 
@@ -796,12 +988,9 @@ fn setup_keyboard_observers() {
             animation_duration: duration,
         });
 
+        // Keyboard show typically triggers scroll animations
         if response.request_redraw {
-            IOS_VIEW.with(|v| {
-                if let Some(ref view) = *v.borrow() {
-                    view.set_needs_display();
-                }
-            });
+            resume_display_link();
         }
     });
 
@@ -815,12 +1004,9 @@ fn setup_keyboard_observers() {
             animation_duration: duration,
         });
 
+        // Keyboard hide typically triggers scroll animations
         if response.request_redraw {
-            IOS_VIEW.with(|v| {
-                if let Some(ref view) = *v.borrow() {
-                    view.set_needs_display();
-                }
-            });
+            resume_display_link();
         }
     });
 

@@ -243,6 +243,19 @@ func (b *TextBuffer) ResetBlink() {
 	b.lastBlinkToggle = time.Now()
 }
 
+// TimeUntilNextBlink returns the duration until the cursor should toggle.
+// Returns 0 if the toggle time has passed.
+func (b *TextBuffer) TimeUntilNextBlink() time.Duration {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	elapsed := time.Since(b.lastBlinkToggle)
+	if elapsed >= b.blinkInterval {
+		return 0
+	}
+	return b.blinkInterval - elapsed
+}
+
 // Insert inserts text at the cursor position.
 // If there's a selection, it replaces the selected text.
 // Respects read-only mode and character filtering.

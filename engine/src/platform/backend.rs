@@ -22,6 +22,10 @@ pub struct AppConfig {
     pub transparent: bool,
     pub always_on_top: bool,
     pub fullscreen: bool,
+    /// Target frames per second (default: 60)
+    /// Use lower values (e.g., 30) for lighter apps to save battery
+    /// Use higher values (e.g., 120) for games on high refresh rate displays
+    pub target_fps: u32,
 }
 
 impl Default for AppConfig {
@@ -35,6 +39,7 @@ impl Default for AppConfig {
             transparent: false,
             always_on_top: false,
             fullscreen: false,
+            target_fps: 60,
         }
     }
 }
@@ -95,10 +100,13 @@ pub enum PlatformEvent {
 /// Response from application to platform
 #[derive(Debug, Clone, Default)]
 pub struct EventResponse {
-    /// Request another frame
+    /// Request another frame immediately (for animations, scrolling)
     pub request_redraw: bool,
     /// Request exit
     pub exit: bool,
+    /// Schedule a redraw after N milliseconds (for cursor blink, etc.)
+    /// Only used if request_redraw is false
+    pub redraw_after_ms: u32,
 }
 
 /// Safe area insets (for notched devices, status bars, etc.)

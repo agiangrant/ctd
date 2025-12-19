@@ -218,6 +218,7 @@ type AppConfigC struct {
 	VSync                 bool
 	LowPowerGPU           bool
 	AllowSoftwareFallback bool
+	TargetFPS             uint32
 	UserData              uintptr
 	Decorations           bool
 	Transparent           bool
@@ -785,6 +786,7 @@ type FrameResponse struct {
 	ImmediateCommands []RenderCommand
 	WidgetDelta       interface{}
 	RequestRedraw     bool
+	RedrawAfterMs     uint32 // Schedule a redraw after N milliseconds (0 = no delayed redraw)
 }
 
 // EventHandler is called for each event from the engine
@@ -802,7 +804,11 @@ type AppConfig struct {
 	VSync                 bool
 	LowPowerGPU           bool
 	AllowSoftwareFallback bool
-	Transport             TransportMode
+	// TargetFPS is the target frames per second (default: 60)
+	// Use lower values (e.g., 30) for lighter apps to save battery
+	// Use higher values (e.g., 120) for games on high refresh rate displays
+	TargetFPS uint32
+	Transport TransportMode
 
 	Decorations bool
 	Transparent bool
@@ -832,6 +838,7 @@ func DefaultAppConfig() AppConfig {
 		VSync:                 true,
 		LowPowerGPU:           false,
 		AllowSoftwareFallback: false,
+		TargetFPS:             60,
 		Transport:             TransportSharedMemory,
 
 		Decorations: true,
@@ -969,6 +976,7 @@ func iosReadyCallback() {
 		VSync:                 config.VSync,
 		LowPowerGPU:           config.LowPowerGPU,
 		AllowSoftwareFallback: config.AllowSoftwareFallback,
+		TargetFPS:             config.TargetFPS,
 		UserData:              0,
 		Decorations:           config.Decorations,
 		Transparent:           config.Transparent,
@@ -1050,6 +1058,7 @@ func androidReadyCallback() {
 		VSync:                 config.VSync,
 		LowPowerGPU:           config.LowPowerGPU,
 		AllowSoftwareFallback: config.AllowSoftwareFallback,
+		TargetFPS:             config.TargetFPS,
 		Resizable:             config.Resizable,
 		AlwaysOnTop:           config.AlwaysOnTop,
 		MinWidth:              config.MinWidth,
@@ -1152,6 +1161,7 @@ func Run(config AppConfig, handler EventHandler) error {
 		VSync:                 config.VSync,
 		LowPowerGPU:           config.LowPowerGPU,
 		AllowSoftwareFallback: config.AllowSoftwareFallback,
+		TargetFPS:             config.TargetFPS,
 		UserData:              0,
 		Decorations:           config.Decorations,
 		Transparent:           config.Transparent,

@@ -29,6 +29,29 @@ thread_local! {
     static SAFE_AREA: RefCell<SafeAreaInsets> = RefCell::new(SafeAreaInsets::default());
     static SCALE_FACTOR: RefCell<f64> = RefCell::new(1.0);
     static APP_READY: RefCell<bool> = RefCell::new(false);
+    /// When to trigger next scheduled redraw (None = no scheduled redraw)
+    static NEXT_REDRAW_AT: RefCell<Option<std::time::Instant>> = RefCell::new(None);
+    /// Whether we're in continuous rendering mode (animations, scrolling, etc.)
+    static CONTINUOUS_RENDER: RefCell<bool> = RefCell::new(true);
+    /// Track if we've rendered at least one frame (prevents going idle before first render)
+    static HAS_RENDERED_FRAME: RefCell<bool> = RefCell::new(false);
+    /// Grace period - keep rendering until this time (allows async ops like video to start)
+    static RENDER_UNTIL: RefCell<Option<std::time::Instant>> = RefCell::new(None);
+    /// Target frames per second (configured at app init)
+    static TARGET_FPS: RefCell<u32> = RefCell::new(60);
+}
+
+/// Set the target FPS for the render loop
+pub fn set_target_fps(fps: u32) {
+    TARGET_FPS.with(|f| *f.borrow_mut() = fps.max(1)); // Minimum 1 FPS
+}
+
+/// Get the frame duration in milliseconds based on target FPS
+fn get_frame_duration_ms() -> u64 {
+    TARGET_FPS.with(|f| {
+        let fps = *f.borrow();
+        if fps == 0 { 16 } else { 1000 / fps as u64 }
+    })
 }
 
 // Global JNI state (set during JNI_OnLoad)
@@ -164,6 +187,87 @@ fn send_event(event: PlatformEvent) -> EventResponse {
             }
         }
     })
+}
+
+/// Handle an event response - check for exit, redraw requests, and scheduled redraws
+/// The `was_rendered_before` flag indicates if we had rendered at least one frame
+/// BEFORE the event that generated this response. This ensures we don't go idle
+/// until after the initial UI is fully rendered.
+fn handle_event_response(response: &EventResponse, was_rendered_before: bool) {
+    if response.exit {
+        REQUEST_EXIT.store(true, Ordering::SeqCst);
+    }
+
+    if response.request_redraw {
+        // App wants continuous rendering (animation in progress)
+        CONTINUOUS_RENDER.with(|c| *c.borrow_mut() = true);
+        REQUEST_REDRAW.store(true, Ordering::SeqCst);
+    } else {
+        // Only allow going idle if we've rendered at least one frame before
+        // This prevents the app from going idle before the initial UI is shown
+        if was_rendered_before {
+            // No immediate redraw needed - switch to idle mode
+            CONTINUOUS_RENDER.with(|c| *c.borrow_mut() = false);
+
+            // Check if we need to schedule a delayed redraw (e.g., cursor blink)
+            if response.redraw_after_ms > 0 {
+                let when = std::time::Instant::now() + std::time::Duration::from_millis(response.redraw_after_ms as u64);
+                NEXT_REDRAW_AT.with(|r| *r.borrow_mut() = Some(when));
+            } else {
+                // No scheduled redraw needed
+                NEXT_REDRAW_AT.with(|r| *r.borrow_mut() = None);
+            }
+        }
+        // If we haven't rendered yet, keep CONTINUOUS_RENDER true
+    }
+}
+
+/// Mark that we've rendered at least one frame
+fn mark_frame_rendered() {
+    HAS_RENDERED_FRAME.with(|h| *h.borrow_mut() = true);
+}
+
+/// Check if we should render this frame
+fn should_render_frame() -> bool {
+    // Always render if we haven't rendered the first frame yet
+    if !HAS_RENDERED_FRAME.with(|h| *h.borrow()) {
+        return true;
+    }
+
+    // Render if continuous mode (animations, scrolling, etc.)
+    if CONTINUOUS_RENDER.with(|c| *c.borrow()) {
+        return true;
+    }
+
+    // Render if within grace period (allows async ops like video playback to start)
+    if let Some(until) = RENDER_UNTIL.with(|r| *r.borrow()) {
+        if std::time::Instant::now() < until {
+            return true;
+        }
+    }
+
+    // Render if scheduled redraw time has passed (cursor blink, etc.)
+    if let Some(when) = NEXT_REDRAW_AT.with(|r| *r.borrow()) {
+        if when <= std::time::Instant::now() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Extend the render grace period - keeps rendering for a short while
+/// to allow async operations (video playback, network loads) to start
+fn extend_render_grace_period() {
+    let grace_duration = std::time::Duration::from_millis(500); // 500ms grace period
+    let new_until = std::time::Instant::now() + grace_duration;
+    RENDER_UNTIL.with(|r| {
+        let current = r.borrow().unwrap_or(std::time::Instant::now());
+        // Only extend if new time is later
+        if new_until > current {
+            *r.borrow_mut() = Some(new_until);
+        }
+    });
 }
 
 /// Process queued text input and key events from the JNI thread.
@@ -970,26 +1074,42 @@ fn run_android_event_loop(app: AndroidApp) {
             break;
         }
 
-        // Poll for events with 16ms timeout (~60fps)
-        app.poll_events(Some(std::time::Duration::from_millis(16)), |event| {
+        // Poll at the configured frame rate for input responsiveness
+        // The actual rendering decision is made separately - polling is cheap, rendering is expensive
+        let frame_duration = get_frame_duration_ms();
+        app.poll_events(Some(std::time::Duration::from_millis(frame_duration)), |event| {
             match event {
                 PollEvent::Wake => {
-                    // Check if redraw was requested
+                    // Check if redraw was requested (from another thread)
                     if REQUEST_REDRAW.swap(false, Ordering::SeqCst) {
+                        // Check if we've rendered before BEFORE this render
+                        let was_rendered = HAS_RENDERED_FRAME.with(|h| *h.borrow());
                         let response = send_event(PlatformEvent::RedrawRequested);
-                        if response.exit {
-                            REQUEST_EXIT.store(true, Ordering::SeqCst);
-                        }
+                        mark_frame_rendered();
+                        handle_event_response(&response, was_rendered);
                     }
                 }
                 PollEvent::Timeout => {
-                    // Frame tick - request redraw if we have a window and app is ready
-                    if has_window && APP_READY.with(|r| *r.borrow()) {
+                    // Poll timeout fired - check if we actually need to render
+                    // Polling happens every 16ms for responsiveness, but rendering
+                    // only happens when needed (animations, cursor blink, first frame)
+                    if has_window && APP_READY.with(|r| *r.borrow()) && should_render_frame() {
+                        // Clear the scheduled redraw time since we're rendering now
+                        NEXT_REDRAW_AT.with(|r| *r.borrow_mut() = None);
+
+                        // Check if we've rendered before BEFORE this render
+                        let was_rendered = HAS_RENDERED_FRAME.with(|h| *h.borrow());
+
                         let response = send_event(PlatformEvent::RedrawRequested);
-                        if response.exit {
-                            REQUEST_EXIT.store(true, Ordering::SeqCst);
-                        }
+
+                        // Mark that we've rendered at least one frame
+                        mark_frame_rendered();
+
+                        handle_event_response(&response, was_rendered);
                     }
+                    // If should_render_frame() is false, we skip rendering but still
+                    // processed any pending input events - this saves CPU/GPU while
+                    // remaining responsive to user interaction
                 }
                 PollEvent::Main(main_event) => {
                     match main_event {
@@ -997,6 +1117,12 @@ fn run_android_event_loop(app: AndroidApp) {
                             info!("InitWindow received");
                             handle_init_window(&app);
                             has_window = true;
+                            // Enable continuous rendering initially until app tells us to stop
+                            CONTINUOUS_RENDER.with(|c| *c.borrow_mut() = true);
+                            // Set a longer grace period on startup (1 second) to allow
+                            // videos and other async content to load
+                            let startup_grace = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                            RENDER_UNTIL.with(|r| *r.borrow_mut() = Some(startup_grace));
                         }
                         MainEvent::TerminateWindow { .. } => {
                             info!("TerminateWindow received");
@@ -1040,24 +1166,21 @@ fn run_android_event_loop(app: AndroidApp) {
                                     height: logical_height,
                                     scale_factor: scale,
                                 });
-                                if response.exit {
-                                    REQUEST_EXIT.store(true, Ordering::SeqCst);
-                                }
+                                // For resize events, always allow going idle if app says so
+                                handle_event_response(&response, true);
                             }
                         }
                         MainEvent::GainedFocus => {
                             info!("App gained focus (Resumed)");
                             let response = send_event(PlatformEvent::Resumed);
-                            if response.exit {
-                                REQUEST_EXIT.store(true, Ordering::SeqCst);
-                            }
+                            // On resume, force continuous rendering until first frame
+                            CONTINUOUS_RENDER.with(|c| *c.borrow_mut() = true);
+                            handle_event_response(&response, true);
                         }
                         MainEvent::LostFocus => {
                             info!("App lost focus (Suspended)");
                             let response = send_event(PlatformEvent::Suspended);
-                            if response.exit {
-                                REQUEST_EXIT.store(true, Ordering::SeqCst);
-                            }
+                            handle_event_response(&response, true);
                         }
                         MainEvent::LowMemory => {
                             info!("Low memory warning");
@@ -1075,6 +1198,7 @@ fn run_android_event_loop(app: AndroidApp) {
         });
 
         // Handle input events separately (touch, keyboard)
+        // Touch/key events trigger immediate redraw for responsiveness
         if let Ok(mut input_iter) = app.input_events_iter() {
             loop {
                 if !input_iter.next(|event| {
@@ -1083,12 +1207,10 @@ fn run_android_event_loop(app: AndroidApp) {
                             let events = handle_motion_event(&motion_event);
                             for e in events {
                                 let response = send_event(e);
-                                if response.exit {
-                                    REQUEST_EXIT.store(true, Ordering::SeqCst);
-                                }
-                                if response.request_redraw {
-                                    REQUEST_REDRAW.store(true, Ordering::SeqCst);
-                                }
+                                // Extend grace period for touch events - allows async ops
+                                // like video playback to start before we go idle
+                                extend_render_grace_period();
+                                handle_event_response(&response, true);
                             }
                             InputStatus::Handled
                         }
@@ -1096,12 +1218,9 @@ fn run_android_event_loop(app: AndroidApp) {
                             // handle_key_event returns multiple events (KeyPressed + optional TextInput)
                             for e in handle_key_event(&key_event) {
                                 let response = send_event(e);
-                                if response.exit {
-                                    REQUEST_EXIT.store(true, Ordering::SeqCst);
-                                }
-                                if response.request_redraw {
-                                    REQUEST_REDRAW.store(true, Ordering::SeqCst);
-                                }
+                                // Extend grace period for key events
+                                extend_render_grace_period();
+                                handle_event_response(&response, true);
                             }
                             InputStatus::Handled
                         }
@@ -1116,8 +1235,9 @@ fn run_android_event_loop(app: AndroidApp) {
         // Process queued input from JNI callbacks (software keyboard)
         // This must be done on the main thread where ANDROID_CALLBACK is registered
         if process_queued_input() {
-            // If we processed input, request a redraw
-            REQUEST_REDRAW.store(true, Ordering::SeqCst);
+            // If we processed input, enable continuous rendering temporarily
+            // The next frame response will tell us if we need to keep it
+            CONTINUOUS_RENDER.with(|c| *c.borrow_mut() = true);
         }
     }
 

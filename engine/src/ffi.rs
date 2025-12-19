@@ -1404,6 +1404,10 @@ pub struct AppConfig {
     pub low_power_gpu: bool,
     /// Allow software rendering fallback (false = fail on devices without proper GPU)
     pub allow_software_fallback: bool,
+    /// Target frames per second (default: 60)
+    /// Use lower values (e.g., 30) for lighter apps to save battery
+    /// Use higher values (e.g., 120) for games on high refresh rate displays
+    pub target_fps: u32,
     /// User data pointer passed to callbacks
     pub user_data: *mut std::ffi::c_void,
 
@@ -1501,6 +1505,9 @@ pub struct FrameResponse {
     /// Request another frame immediately (for animations)
     /// If false, waits for next event before redrawing
     pub request_redraw: bool,
+    /// Schedule a redraw after N milliseconds (0 = no delayed redraw)
+    /// Used for cursor blink, delayed animations, etc.
+    pub redraw_after_ms: u32,
 }
 
 /// Callback function type for the application loop
@@ -1556,6 +1563,8 @@ struct App {
     should_exit: bool,
     // Keyboard modifier state
     modifiers: winit::keyboard::ModifiersState,
+    // Scheduled redraw time (for cursor blink, etc.)
+    next_redraw_at: Option<std::time::Instant>,
 }
 
 // Modifier flags for keyboard events (passed in data2)
@@ -1754,6 +1763,23 @@ fn update_safe_area_from_window(window: &winit::window::Window) {
 }
 
 impl ApplicationHandler<UserEvent> for App {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+        // Check if we woke up due to a scheduled redraw
+        if let winit::event::StartCause::ResumeTimeReached { .. } = cause {
+            if let Some(wake_time) = self.next_redraw_at {
+                if wake_time <= std::time::Instant::now() {
+                    // Time has arrived, request a redraw
+                    self.next_redraw_at = None;
+                    if let Some(ref window) = self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+        }
+        // Reset to Wait by default, will be updated by event handlers
+        event_loop.set_control_flow(ControlFlow::Wait);
+    }
+
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::RequestRedraw => {
@@ -2101,12 +2127,32 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
 
-                // Only request next frame if app wants continuous rendering
-                // (immediate mode / animation) or if retained widgets are dirty
+                // Handle redraw scheduling
+                self.update_scheduled_redraw(&response);
+
                 if response.request_redraw {
+                    // Immediate redraw requested (animations, scrolling, etc.)
                     if let Some(ref window) = self.window {
                         window.request_redraw();
                     }
+                    // Clear scheduled redraw since we're doing immediate
+                    self.next_redraw_at = None;
+                    event_loop.set_control_flow(ControlFlow::Poll);
+                } else if let Some(wake_time) = self.next_redraw_at {
+                    // Delayed redraw scheduled (cursor blink, etc.)
+                    if wake_time <= std::time::Instant::now() {
+                        // Time already passed, request immediate redraw
+                        if let Some(ref window) = self.window {
+                            window.request_redraw();
+                        }
+                        self.next_redraw_at = None;
+                    } else {
+                        // Schedule wakeup at the specified time
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(wake_time));
+                    }
+                } else {
+                    // No redraw needed, wait for events
+                    event_loop.set_control_flow(ControlFlow::Wait);
                 }
             }
 
@@ -2325,6 +2371,7 @@ struct ProcessedResponse {
     immediate_commands: Option<String>,
     widget_delta: Option<String>,
     request_redraw: bool,
+    redraw_after_ms: u32,
 }
 
 impl App {
@@ -2334,6 +2381,7 @@ impl App {
             immediate_commands: ptr::null_mut(),
             widget_delta: ptr::null_mut(),
             request_redraw: false,
+            redraw_after_ms: 0,
         };
 
         // Call the Go callback
@@ -2364,6 +2412,20 @@ impl App {
             immediate_commands,
             widget_delta,
             request_redraw: response.request_redraw,
+            redraw_after_ms: response.redraw_after_ms,
+        }
+    }
+
+    /// Update the scheduled redraw time based on response
+    fn update_scheduled_redraw(&mut self, response: &ProcessedResponse) {
+        if response.redraw_after_ms > 0 {
+            let new_time = std::time::Instant::now()
+                + std::time::Duration::from_millis(response.redraw_after_ms as u64);
+            // Keep the earliest scheduled time
+            self.next_redraw_at = Some(match self.next_redraw_at {
+                Some(existing) if existing < new_time => existing,
+                _ => new_time,
+            });
         }
     }
 }
@@ -2470,10 +2532,14 @@ pub extern "C" fn centered_ios_main(argc: i32, argv: *mut *mut i8) -> i32 {
 /// It just registers the callback - the event loop is already running.
 #[cfg(target_os = "ios")]
 unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
-    use crate::platform::ios::register_callback;
+    use crate::platform::ios::{register_callback, set_target_fps};
     use crate::platform::backend::{PlatformEvent, EventResponse};
 
-    println!("[FFI] run_ios_app: registering callback");
+    // Set the target FPS from config (default 60 if not specified or 0)
+    let fps = if config.target_fps == 0 { 60 } else { config.target_fps };
+    set_target_fps(fps);
+
+    println!("[FFI] run_ios_app: registering callback (target FPS: {})", fps);
 
     // Wrap the C callback in a Rust closure that translates events
     let user_data = config.user_data;
@@ -2567,6 +2633,7 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
                         immediate_commands: std::ptr::null_mut(),
                         widget_delta: std::ptr::null_mut(),
                         request_redraw: false,
+                        redraw_after_ms: 0,
                     };
                     c_callback(&char_event, &mut temp_response, user_data);
                 }
@@ -2592,6 +2659,7 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
             immediate_commands: std::ptr::null_mut(),
             widget_delta: std::ptr::null_mut(),
             request_redraw: false,
+            redraw_after_ms: 0,
         };
 
         c_callback(&app_event, &mut frame_response, user_data);
@@ -2606,6 +2674,7 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
                     return EventResponse {
                         request_redraw: frame_response.request_redraw,
                         exit: false,
+                        redraw_after_ms: frame_response.redraw_after_ms,
                     };
                 }
             };
@@ -2619,6 +2688,7 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
                         return EventResponse {
                             request_redraw: frame_response.request_redraw,
                             exit: false,
+                            redraw_after_ms: frame_response.redraw_after_ms,
                         };
                     }
                 };
@@ -2634,6 +2704,7 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
         EventResponse {
             request_redraw: frame_response.request_redraw,
             exit: false, // FrameResponse doesn't have exit
+            redraw_after_ms: frame_response.redraw_after_ms,
         }
     };
 
@@ -2652,10 +2723,14 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
 /// Similar to iOS - it registers the callback, the event loop is already managed by android-activity.
 #[cfg(target_os = "android")]
 unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
-    use crate::platform::android::register_callback;
+    use crate::platform::android::{register_callback, set_target_fps};
     use crate::platform::backend::{PlatformEvent, EventResponse};
 
-    log::info!("[FFI] run_android_app: registering callback");
+    // Set the target FPS from config (default 60 if not specified or 0)
+    let fps = if config.target_fps == 0 { 60 } else { config.target_fps };
+    set_target_fps(fps);
+
+    log::info!("[FFI] run_android_app: registering callback (target FPS: {})", fps);
 
     // Wrap the C callback in a Rust closure that translates events
     let user_data = config.user_data;
@@ -2739,6 +2814,7 @@ unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
                         immediate_commands: std::ptr::null_mut(),
                         widget_delta: std::ptr::null_mut(),
                         request_redraw: false,
+                        redraw_after_ms: 0,
                     };
                     c_callback(&char_event, &mut temp_response, user_data);
                 }
@@ -2800,6 +2876,7 @@ unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
             immediate_commands: std::ptr::null_mut(),
             widget_delta: std::ptr::null_mut(),
             request_redraw: false,
+            redraw_after_ms: 0,
         };
 
         c_callback(&app_event, &mut frame_response, user_data);
@@ -2822,6 +2899,7 @@ unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
         EventResponse {
             request_redraw: frame_response.request_redraw,
             exit: false,
+            redraw_after_ms: frame_response.redraw_after_ms,
         }
     };
 
@@ -2889,6 +2967,7 @@ unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
         },
         should_exit: false,
         modifiers: winit::keyboard::ModifiersState::empty(),
+        next_redraw_at: None,
     };
 
     // Run the event loop (blocks until exit)
