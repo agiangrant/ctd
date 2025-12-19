@@ -6,7 +6,7 @@
 #![cfg(target_os = "android")]
 
 use jni::objects::{GlobalRef, JObject, JValue};
-use log::{info, error};
+use log::error;
 
 use super::{AudioBackend, AudioError, AudioInfo, PlaybackState};
 
@@ -73,8 +73,6 @@ impl AndroidAudioPlayer {
         if is_url {
             // For HTTP/HTTPS URLs, use setDataSource(String) directly
             // This avoids ContentResolver issues and handles network URLs properly
-            info!("Setting URL data source: {}", path);
-
             let result = env.call_method(
                 media_player.as_obj(),
                 "setDataSource",
@@ -101,11 +99,8 @@ impl AndroidAudioPlayer {
 
             result.map_err(|e| AudioError::LoadError(format!("Failed to set data source: {:?}", e)))?;
 
-            info!("Set URL data source successfully: {}", path);
-
             // Use synchronous prepare() - this blocks until ready but is reliable
             // (prepareAsync requires OnPreparedListener which is complex via JNI)
-            info!("Preparing media player (this may take a moment for network URLs)...");
             let prepare_result = env.call_method(media_player.as_obj(), "prepare", "()V", &[]);
 
             if env.exception_check().unwrap_or(false) {
@@ -142,7 +137,6 @@ impl AndroidAudioPlayer {
                 is_stream: true,
             });
             self.state = PlaybackState::Paused;
-            info!("Audio prepared from URL, duration: {}ms", duration);
         } else {
             // For local files, use simple setDataSource
             let result = env.call_method(
@@ -185,7 +179,6 @@ impl AndroidAudioPlayer {
             });
 
             self.state = PlaybackState::Paused;
-            info!("Audio prepared from file, duration: {}ms", duration);
         }
 
         Ok(())
@@ -201,23 +194,18 @@ impl AudioBackend for AndroidAudioPlayer {
             self.media_player = Some(self.create_media_player()?);
         }
 
-        self.set_data_source(path, false)?;
-        info!("Android audio loaded from file: {}", path);
-        Ok(())
+        self.set_data_source(path, false)
     }
 
     fn load_url(&mut self, url: &str) -> Result<(), AudioError> {
         self.state = PlaybackState::Loading;
-        info!("Android audio loading from URL: {}", url);
 
         // Create MediaPlayer if needed
         if self.media_player.is_none() {
             self.media_player = Some(self.create_media_player()?);
         }
 
-        self.set_data_source(url, true)?;
-        info!("Android audio loaded from URL: {}", url);
-        Ok(())
+        self.set_data_source(url, true)
     }
 
     fn info(&self) -> Option<&AudioInfo> {
@@ -236,7 +224,6 @@ impl AudioBackend for AndroidAudioPlayer {
 
         result.map_err(|e| AudioError::Other(format!("Failed to play: {:?}", e)))?;
         self.state = PlaybackState::Playing;
-        info!("Android audio playing");
         Ok(())
     }
 
@@ -252,7 +239,6 @@ impl AudioBackend for AndroidAudioPlayer {
 
         result.map_err(|e| AudioError::Other(format!("Failed to pause: {:?}", e)))?;
         self.state = PlaybackState::Paused;
-        info!("Android audio paused");
         Ok(())
     }
 
@@ -269,7 +255,6 @@ impl AudioBackend for AndroidAudioPlayer {
         result.map_err(|e| AudioError::Other(format!("Failed to stop: {:?}", e)))?;
         self.current_time_ms = 0;
         self.state = PlaybackState::Ended;
-        info!("Android audio stopped");
         Ok(())
     }
 
@@ -290,7 +275,6 @@ impl AudioBackend for AndroidAudioPlayer {
 
         result.map_err(|e| AudioError::SeekError(format!("Failed to seek: {:?}", e)))?;
         self.current_time_ms = timestamp_ms;
-        info!("Android audio seeked to {}ms", timestamp_ms);
         Ok(())
     }
 

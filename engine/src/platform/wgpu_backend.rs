@@ -1763,27 +1763,10 @@ impl WgpuBackend {
                 let mut current_line_glyphs = Vec::new();
                 let mut current_line_width = 0.0f32;
 
-                // Debug: log wrapping info for text with emojis (Android only)
-                #[cfg(target_os = "android")]
-                let has_emoji = paragraph.chars().any(|c| is_emoji(c));
-                #[cfg(target_os = "android")]
-                if has_emoji {
-                    log::info!("TEXT WRAP: paragraph='{}', max_w={:.1}, words={:?}",
-                        paragraph, max_w, words);
-                }
-
                 for word in words {
                     // Measure the word
                     let word_glyphs = self.rasterize_text_segment(&word, scaled_font, font_id, font_size)?;
                     let word_width = Self::calculate_glyphs_width(&word_glyphs, letter_spacing, word_spacing);
-
-                    #[cfg(target_os = "android")]
-                    if has_emoji {
-                        log::info!("  WORD '{}': width={:.1}, current_line={:.1}, would_be={:.1}, max={:.1}, fits={}",
-                            word, word_width, current_line_width,
-                            current_line_width + word_width, max_w,
-                            current_line_width + word_width <= max_w || current_line_glyphs.is_empty());
-                    }
 
                     // Check if word fits on current line
                     // Small tolerance for floating point rounding only
