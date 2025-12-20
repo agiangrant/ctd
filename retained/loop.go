@@ -588,6 +588,17 @@ func (l *Loop) Run(appConfig ffi.AppConfig) error {
 	l.startTime = time.Now()
 	l.lastFrameTime = l.startTime
 
+	// Preload bundled fonts from theme configuration.
+	// On native platforms this is a no-op (fonts load lazily).
+	// On web, this registers fonts with the browser before first render.
+	for name, config := range getThemeFonts() {
+		if config.IsBundled {
+			if err := ffi.LoadBundledFont(config.Value); err != nil {
+				fmt.Printf("Warning: failed to load bundled font '%s' (%s): %v\n", name, config.Value, err)
+			}
+		}
+	}
+
 	return ffi.Run(appConfig, l.handleEvent)
 }
 

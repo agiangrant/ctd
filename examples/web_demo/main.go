@@ -156,6 +156,31 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		retained.Text("✓ Hover/Active states", "text-green-400 text-sm"),
 		retained.Text("✓ Animations", "text-green-400 text-sm"),
 		retained.Text("✓ Scrolling (scroll down!)", "text-green-400 text-sm"),
+		retained.Text("✓ Bundled custom fonts", "text-green-400 text-sm"),
+	)
+
+	// Bundled fonts demo - uses font-serif from theme.toml which is a bundled TTF
+	fontCard := retained.VStack("bg-gray-800 rounded-2xl p-4 gap-3 w-full",
+		retained.Text("Bundled Fonts", "text-white text-lg font-semibold"),
+		retained.Text("Custom fonts loaded from TTF files", "text-gray-400 text-xs"),
+
+		// System sans (default)
+		retained.VStack("gap-1 w-full",
+			retained.Text("font-sans (System)", "text-gray-500 text-xs"),
+			retained.Text("The quick brown fox jumps over the lazy dog", "text-white text-lg font-sans"),
+		),
+
+		// Bundled serif font
+		retained.VStack("gap-1 w-full",
+			retained.Text("font-serif (Bundled TTF)", "text-gray-500 text-xs"),
+			retained.Text("The quick brown fox jumps over the lazy dog", "text-white text-lg font-serif"),
+		),
+
+		// System mono
+		retained.VStack("gap-1 w-full",
+			retained.Text("font-mono (System)", "text-gray-500 text-xs"),
+			retained.Text("The quick brown fox jumps over the lazy dog", "text-white text-lg font-mono"),
+		),
 	)
 
 	// Form section
@@ -340,9 +365,10 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		subtitle,
 		counterCard,
 		featureCard,
+		fontCard,
 		formCard,
 		mediaCard,
-		retained.Text("↓ Scroll down for more ↓", "text-gray-500 text-sm text-end"),
+		retained.Text("↓ Scroll down for more ↓", "text-gray-500 text-sm text-center"),
 		platformCard,
 		scrollCard,
 		footer,

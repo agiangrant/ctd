@@ -1694,6 +1694,30 @@ func BundledFontWithWeight(path string, size float32, weight uint16) FontDescrip
 	}
 }
 
+// LoadBundledFont preloads a bundled font from the given path.
+// On native platforms, fonts are loaded lazily by the engine, so this is a no-op.
+// On web, this must be called before using the font to register it with the browser.
+func LoadBundledFont(path string) error {
+	// No-op on native - fonts load lazily when first used
+	return nil
+}
+
+// LoadBundledFontFromData preloads a font from raw byte data.
+// On native platforms, this is a no-op (fonts load lazily).
+// On web, this registers the font data with the browser's FontFace API.
+func LoadBundledFontFromData(name string, data []byte) error {
+	// No-op on native - fonts load lazily when first used
+	return nil
+}
+
+// IsFontLoaded checks if a bundled font has been loaded.
+// On native platforms, this always returns true since fonts load lazily.
+// On web, returns true only if LoadBundledFont was called for this path.
+func IsFontLoaded(path string) bool {
+	// On native, fonts are loaded on-demand by the engine
+	return true
+}
+
 func DefaultTextLayout() TextLayoutConfig {
 	return TextLayoutConfig{
 		LineHeight: 1.5, LetterSpacing: 0.0, WordSpacing: 0.0,

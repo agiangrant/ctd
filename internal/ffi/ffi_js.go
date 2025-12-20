@@ -31,6 +31,9 @@ var (
 	// Animation loop control
 	animationLoopRunning bool
 	animationFrame       js.Func
+
+	// Bundled font registry: path -> CSS font-family name
+	bundledFonts = make(map[string]string)
 )
 
 func init() {
@@ -1306,7 +1309,18 @@ func drawText(ctx js.Value, cmd *DrawTextCmd) {
 
 	// Map font names to proper CSS font families
 	fontFamily := "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-	if cmd.Font.Source.System != nil {
+
+	// Check for bundled font first
+	if cmd.Font.Source.Bundled != nil {
+		path := *cmd.Font.Source.Bundled
+		if family := getBundledFontFamily(path); family != "" {
+			// Use the loaded bundled font with system fallback
+			fontFamily = fmt.Sprintf("'%s', system-ui, sans-serif", family)
+		} else {
+			// Font not loaded yet - log warning and use system font
+			fmt.Printf("Warning: bundled font '%s' not loaded, using system font\n", path)
+		}
+	} else if cmd.Font.Source.System != nil {
 		name := *cmd.Font.Source.System
 		switch name {
 		case "", "system", "system-ui":
@@ -1592,7 +1606,13 @@ func MeasureTextWidthBatch(requests []TextMeasurementRequest) []float32 {
 
 func MeasureTextWithFont(text string, font FontDescriptor) float32 {
 	fontName := ""
-	if font.Source.System != nil {
+	if font.Source.Bundled != nil {
+		// For bundled fonts, use the registered CSS family name
+		path := *font.Source.Bundled
+		if family := getBundledFontFamily(path); family != "" {
+			fontName = family
+		}
+	} else if font.Source.System != nil {
 		fontName = *font.Source.System
 	}
 	return MeasureTextWidth(text, fontName, font.Size)
@@ -1638,6 +1658,147 @@ func UnloadImage(textureID TextureID) error {
 
 func GetTextureSize(textureID TextureID) (uint32, uint32, error) {
 	return 0, 0, fmt.Errorf("texture not found")
+}
+
+// ============================================================================
+// Bundled Font Loading
+// ============================================================================
+
+// LoadBundledFont loads a font file from the given path and registers it for use.
+// The path should be relative to the web server root (e.g., "fonts/Inter-Regular.ttf").
+// This function starts loading the font asynchronously via the browser's FontFace API.
+// The font will be available for rendering once the browser finishes loading it.
+func LoadBundledFont(path string) error {
+	// Check if already loaded or loading
+	if _, exists := bundledFonts[path]; exists {
+		return nil
+	}
+
+	// Create a unique font family name from the path
+	// e.g., "fonts/Inter-Bold.ttf" -> "centered-font-Inter-Bold"
+	familyName := fontFamilyFromPath(path)
+
+	// Mark as loading immediately so we don't double-load
+	bundledFonts[path] = familyName
+
+	// Create FontFace and add to document.fonts
+	fontFaceConstructor := jsGlobal.Get("FontFace")
+	if fontFaceConstructor.IsUndefined() {
+		delete(bundledFonts, path)
+		return fmt.Errorf("FontFace API not supported in this browser")
+	}
+
+	// Create the font source URL
+	fontURL := fmt.Sprintf("url('%s')", path)
+
+	// Create the FontFace object
+	fontFace := fontFaceConstructor.New(familyName, fontURL)
+
+	// Load the font asynchronously (don't block - WASM is single-threaded)
+	loadPromise := fontFace.Call("load")
+
+	// Handle success/failure asynchronously
+	loadPromise.Call("then", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		// Add the loaded font to document.fonts
+		jsDocument.Get("fonts").Call("add", fontFace)
+		fmt.Printf("Loaded bundled font: %s -> %s\n", path, familyName)
+		return nil
+	})).Call("catch", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		errMsg := "unknown error"
+		if len(args) > 0 && !args[0].IsUndefined() {
+			errMsg = args[0].Get("message").String()
+		}
+		fmt.Printf("Failed to load bundled font '%s': %s\n", path, errMsg)
+		// Keep the mapping so we don't retry - fallback font will be used
+		return nil
+	}))
+
+	return nil
+}
+
+// LoadBundledFontFromData loads a font from raw byte data and registers it.
+// The name parameter is used as the font family identifier.
+// Loading is asynchronous - the font will be available once the browser finishes loading it.
+func LoadBundledFontFromData(name string, data []byte) error {
+	// Check if already loaded
+	familyName := "centered-font-" + name
+	if _, exists := bundledFonts[name]; exists {
+		return nil
+	}
+
+	// Mark as loading immediately
+	bundledFonts[name] = familyName
+
+	// Create a Uint8Array from the Go bytes
+	jsData := jsGlobal.Get("Uint8Array").New(len(data))
+	js.CopyBytesToJS(jsData, data)
+
+	// Create an ArrayBuffer view
+	arrayBuffer := jsData.Get("buffer")
+
+	// Create FontFace from ArrayBuffer
+	fontFaceConstructor := jsGlobal.Get("FontFace")
+	if fontFaceConstructor.IsUndefined() {
+		delete(bundledFonts, name)
+		return fmt.Errorf("FontFace API not supported in this browser")
+	}
+
+	fontFace := fontFaceConstructor.New(familyName, arrayBuffer)
+
+	// Load and add to document.fonts asynchronously
+	loadPromise := fontFace.Call("load")
+	loadPromise.Call("then", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		jsDocument.Get("fonts").Call("add", fontFace)
+		fmt.Printf("Loaded bundled font from data: %s -> %s\n", name, familyName)
+		return nil
+	})).Call("catch", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		errMsg := "unknown error"
+		if len(args) > 0 && !args[0].IsUndefined() {
+			errMsg = args[0].Get("message").String()
+		}
+		fmt.Printf("Failed to load bundled font '%s': %s\n", name, errMsg)
+		return nil
+	}))
+
+	return nil
+}
+
+// fontFamilyFromPath generates a CSS font-family name from a file path.
+// e.g., "fonts/Inter-Bold.ttf" -> "centered-font-Inter-Bold"
+func fontFamilyFromPath(path string) string {
+	// Extract the filename without extension
+	name := path
+	// Remove directory path
+	if idx := lastIndexByte(name, '/'); idx >= 0 {
+		name = name[idx+1:]
+	}
+	// Remove extension
+	if idx := lastIndexByte(name, '.'); idx >= 0 {
+		name = name[:idx]
+	}
+	return "centered-font-" + name
+}
+
+// lastIndexByte returns the index of the last instance of c in s, or -1 if c is not present.
+func lastIndexByte(s string, c byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// getBundledFontFamily returns the CSS font-family name for a bundled font path.
+// Returns empty string if the font hasn't been loaded.
+func getBundledFontFamily(path string) string {
+	return bundledFonts[path]
+}
+
+// IsFontLoaded checks if a bundled font has been loaded.
+func IsFontLoaded(path string) bool {
+	_, exists := bundledFonts[path]
+	return exists
 }
 
 // ============================================================================
