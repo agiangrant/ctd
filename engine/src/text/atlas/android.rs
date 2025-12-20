@@ -51,6 +51,8 @@ fn get_java_vm() -> Option<&'static jni::JavaVM> {
 pub struct AndroidGlyphRasterizer {
     /// Cache of created Paint objects (font name + style -> GlobalRef<Paint>)
     paint_cache: HashMap<String, GlobalRef>,
+    /// Cache of loaded Typeface objects for bundled fonts (path -> GlobalRef<Typeface>)
+    typeface_cache: HashMap<String, GlobalRef>,
     /// Global reference to a reusable Bitmap for rasterization
     /// We create this lazily and resize as needed
     bitmap_ref: Option<GlobalRef>,
@@ -65,12 +67,14 @@ pub struct AndroidGlyphRasterizer {
     canvas_class: Option<GlobalRef>,
     rect_class: Option<GlobalRef>,
     typeface_class: Option<GlobalRef>,
+    file_class: Option<GlobalRef>,
 }
 
 impl AndroidGlyphRasterizer {
     pub fn new() -> Self {
         Self {
             paint_cache: HashMap::new(),
+            typeface_cache: HashMap::new(),
             bitmap_ref: None,
             canvas_ref: None,
             bitmap_size: (0, 0),
@@ -80,6 +84,7 @@ impl AndroidGlyphRasterizer {
             canvas_class: None,
             rect_class: None,
             typeface_class: None,
+            file_class: None,
         }
     }
 
@@ -160,12 +165,21 @@ impl AndroidGlyphRasterizer {
             Err(_) => return false,
         };
 
+        let file = match env.find_class("java/io/File") {
+            Ok(class) => match env.new_global_ref(class) {
+                Ok(global) => global,
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        };
+
         self.paint_class = Some(paint);
         self.bitmap_class = Some(bitmap);
         self.bitmap_config_class = Some(bitmap_config);
         self.canvas_class = Some(canvas);
         self.rect_class = Some(rect);
         self.typeface_class = Some(typeface);
+        self.file_class = Some(file);
 
         log::info!("AndroidGlyphRasterizer: JNI classes initialized successfully");
         true
@@ -216,41 +230,245 @@ impl AndroidGlyphRasterizer {
     }
 
     /// Create a Typeface for the given font descriptor
-    fn create_typeface<'a>(&self, env: &mut JNIEnv<'a>, font: &FontDescriptor) -> Option<JObject<'a>> {
+    fn create_typeface<'a>(&mut self, env: &mut JNIEnv<'a>, font: &FontDescriptor) -> Option<JObject<'a>> {
+        let typeface_class = self.typeface_class.as_ref()?;
+        let typeface_jclass = unsafe { jni::objects::JClass::from_raw(typeface_class.as_raw()) };
+
+        match &font.source {
+            FontSource::Bundled(path) => {
+                // For bundled fonts, use Typeface.createFromFile()
+                self.create_typeface_from_file(env, path)
+            }
+            FontSource::System(name) | FontSource::Memory { name, .. } => {
+                // For system fonts, use Typeface.create(family, style)
+                let family_name = name.as_str();
+                let j_family = env.new_string(family_name).ok()?;
+
+                // Determine Android typeface style
+                // Android Typeface styles: NORMAL=0, BOLD=1, ITALIC=2, BOLD_ITALIC=3
+                let style = match (font.weight >= 600, font.style) {
+                    (true, FontStyle::Italic) => 3,  // BOLD_ITALIC
+                    (true, _) => 1,                   // BOLD
+                    (false, FontStyle::Italic) => 2, // ITALIC
+                    (false, _) => 0,                  // NORMAL
+                };
+
+                let typeface = env
+                    .call_static_method(
+                        &typeface_jclass,
+                        "create",
+                        "(Ljava/lang/String;I)Landroid/graphics/Typeface;",
+                        &[JValue::Object(&j_family), JValue::Int(style)],
+                    )
+                    .ok()?
+                    .l()
+                    .ok()?;
+
+                Some(typeface)
+            }
+        }
+    }
+
+    /// Create a Typeface from a bundled font file
+    fn create_typeface_from_file<'a>(&mut self, env: &mut JNIEnv<'a>, path: &str) -> Option<JObject<'a>> {
+        // Check if we have a cached typeface for this path
+        if let Some(cached) = self.typeface_cache.get(path) {
+            // Return a local reference from the global reference
+            let local = env.new_local_ref(cached.as_obj()).ok()?;
+            return Some(local);
+        }
+
+        log::info!("Loading bundled font: {}", path);
+
+        // Try loading from Android assets first (this is where bundled fonts should be)
+        if let Some(typeface) = self.create_typeface_from_assets(env, path) {
+            // Cache the typeface
+            if let Ok(global) = env.new_global_ref(&typeface) {
+                log::info!("Successfully loaded bundled font from assets: {}", path);
+                self.typeface_cache.insert(path.to_string(), global);
+            }
+            return Some(typeface);
+        }
+
+        // Fall back to filesystem (for development/testing)
+        if let Some(typeface) = self.create_typeface_from_filesystem(env, path) {
+            if let Ok(global) = env.new_global_ref(&typeface) {
+                log::info!("Successfully loaded bundled font from filesystem: {}", path);
+                self.typeface_cache.insert(path.to_string(), global);
+            }
+            return Some(typeface);
+        }
+
+        log::error!("Failed to load bundled font: {} - falling back to system font", path);
+        self.create_fallback_typeface(env)
+    }
+
+    /// Try to create a Typeface from Android assets folder
+    fn create_typeface_from_assets<'a>(&self, env: &mut JNIEnv<'a>, path: &str) -> Option<JObject<'a>> {
         let typeface_class = self.typeface_class.as_ref()?;
 
-        // Get font family name
-        let family_name = match &font.source {
-            FontSource::System(name) => name.as_str(),
-            FontSource::Bundled(_path) => {
-                // For bundled fonts, we'd need to use Typeface.createFromAsset
-                // For now, fall back to sans-serif
-                "sans-serif"
-            }
-            FontSource::Memory { name, .. } => name.as_str(),
-        };
+        // Get the activity to access AssetManager
+        let activity_ptr = super::super::super::platform::android::get_activity_ptr();
+        if activity_ptr.is_null() {
+            log::warn!("Activity not available for asset loading");
+            return None;
+        }
 
-        // Convert to Java string
-        let j_family = env.new_string(family_name).ok()?;
+        // Wrap activity pointer (don't let JNI delete it)
+        let activity = std::mem::ManuallyDrop::new(unsafe { JObject::from_raw(activity_ptr as *mut _) });
 
-        // Determine Android typeface style
-        // Android Typeface styles: NORMAL=0, BOLD=1, ITALIC=2, BOLD_ITALIC=3
-        let style = match (font.weight >= 600, font.style) {
-            (true, FontStyle::Italic) => 3,  // BOLD_ITALIC
-            (true, _) => 1,                   // BOLD
-            (false, FontStyle::Italic) => 2, // ITALIC
-            (false, _) => 0,                  // NORMAL
-        };
+        // Get AssetManager: context.getAssets()
+        let asset_manager = env
+            .call_method(&*activity, "getAssets", "()Landroid/content/res/AssetManager;", &[])
+            .ok()?
+            .l()
+            .ok()?;
 
-        // Call Typeface.create(String family, int style)
-        // Use cached class reference
+        // Create Typeface from asset: Typeface.createFromAsset(AssetManager, String path)
+        let j_path = env.new_string(path).ok()?;
         let typeface_jclass = unsafe { jni::objects::JClass::from_raw(typeface_class.as_raw()) };
+
+        match env.call_static_method(
+            &typeface_jclass,
+            "createFromAsset",
+            "(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;",
+            &[JValue::Object(&asset_manager), JValue::Object(&j_path)],
+        ) {
+            Ok(result) => {
+                if env.exception_check().unwrap_or(false) {
+                    // Asset not found - this is expected if font isn't in assets
+                    let _ = env.exception_clear();
+                    log::info!("Font not found in assets: {}", path);
+                    return None;
+                }
+                result.l().ok()
+            }
+            Err(_) => {
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_clear();
+                }
+                None
+            }
+        }
+    }
+
+    /// Try to create a Typeface from filesystem
+    fn create_typeface_from_filesystem<'a>(&self, env: &mut JNIEnv<'a>, path: &str) -> Option<JObject<'a>> {
+        let typeface_class = self.typeface_class.as_ref()?;
+        let file_class = self.file_class.as_ref()?;
+
+        // Resolve the font path - try multiple locations
+        let resolved_path = self.resolve_font_path(path);
+
+        // Create a File object for the font path
+        let file_jclass = unsafe { jni::objects::JClass::from_raw(file_class.as_raw()) };
+        let j_path = env.new_string(&resolved_path).ok()?;
+        let file_obj = env
+            .new_object(&file_jclass, "(Ljava/lang/String;)V", &[JValue::Object(&j_path)])
+            .ok()?;
+
+        // Check if file exists
+        let exists = env
+            .call_method(&file_obj, "exists", "()Z", &[])
+            .ok()?
+            .z()
+            .ok()?;
+
+        if !exists {
+            log::info!("Font file not found on filesystem: {}", resolved_path);
+            return None;
+        }
+
+        // Create Typeface from file: Typeface.createFromFile(File file)
+        let typeface_jclass = unsafe { jni::objects::JClass::from_raw(typeface_class.as_raw()) };
+        match env.call_static_method(
+            &typeface_jclass,
+            "createFromFile",
+            "(Ljava/io/File;)Landroid/graphics/Typeface;",
+            &[JValue::Object(&file_obj)],
+        ) {
+            Ok(result) => {
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_clear();
+                    return None;
+                }
+                match result.l() {
+                    Ok(typeface) if !typeface.is_null() => Some(typeface),
+                    _ => None,
+                }
+            }
+            Err(e) => {
+                log::error!("Typeface.createFromFile failed: {:?}", e);
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_clear();
+                }
+                None
+            }
+        }
+    }
+
+    /// Resolve font path - try multiple locations
+    fn resolve_font_path(&self, path: &str) -> String {
+        use std::path::Path;
+
+        // If path is absolute, use it directly
+        if Path::new(path).is_absolute() {
+            return path.to_string();
+        }
+
+        // Try the app's internal files directory first (this is where bundled assets should be)
+        // This is set during android_main from context.getFilesDir()
+        if let Some(files_dir) = super::super::super::platform::android::get_app_files_dir() {
+            let files_path = Path::new(files_dir).join(path);
+            log::info!("Checking font path in files dir: {}", files_path.display());
+            if files_path.exists() {
+                return files_path.to_string_lossy().to_string();
+            }
+
+            // Also try just the filename in the files directory
+            // (in case the font was copied without preserving directory structure)
+            if let Some(filename) = Path::new(path).file_name() {
+                let flat_path = Path::new(files_dir).join(filename);
+                if flat_path.exists() {
+                    return flat_path.to_string_lossy().to_string();
+                }
+            }
+        }
+
+        // Try relative to current working directory
+        if let Ok(cwd) = std::env::current_dir() {
+            let full_path = cwd.join(path);
+            if full_path.exists() {
+                return full_path.to_string_lossy().to_string();
+            }
+        }
+
+        // Try relative to executable directory
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let exe_relative = exe_dir.join(path);
+                if exe_relative.exists() {
+                    return exe_relative.to_string_lossy().to_string();
+                }
+            }
+        }
+
+        // Return the original path if nothing else works
+        path.to_string()
+    }
+
+    /// Create a fallback typeface (sans-serif)
+    fn create_fallback_typeface<'a>(&self, env: &mut JNIEnv<'a>) -> Option<JObject<'a>> {
+        let typeface_class = self.typeface_class.as_ref()?;
+        let typeface_jclass = unsafe { jni::objects::JClass::from_raw(typeface_class.as_raw()) };
+
+        let j_family = env.new_string("sans-serif").ok()?;
         let typeface = env
             .call_static_method(
                 &typeface_jclass,
                 "create",
                 "(Ljava/lang/String;I)Landroid/graphics/Typeface;",
-                &[JValue::Object(&j_family), JValue::Int(style)],
+                &[JValue::Object(&j_family), JValue::Int(0)], // NORMAL style
             )
             .ok()?
             .l()

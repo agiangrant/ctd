@@ -169,7 +169,32 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		retained.Text("✓ Touch interactions", "text-green-400 text-sm"),
 		retained.Text("✓ Hover/Active states", "text-green-400 text-sm"),
 		retained.Text("✓ Go + Rust engine", "text-green-400 text-sm"),
+		retained.Text("✓ Custom bundled fonts", "text-green-400 text-sm"),
 		retained.Text("✓ Cross-platform", "text-green-400 text-sm"),
+	)
+
+	// Bundled Fonts Demo - uses font-serif from theme.toml which is a bundled TTF
+	fontCard := retained.VStack("bg-gray-800 rounded-2xl p-4 gap-3 w-full",
+		retained.Text("Bundled Fonts", "text-white text-lg font-semibold"),
+		retained.Text("Custom fonts loaded from TTF files", "text-gray-400 text-xs"),
+
+		// System sans (default)
+		retained.VStack("gap-1 w-full",
+			retained.Text("font-sans (System)", "text-gray-500 text-xs"),
+			retained.Text("The quick brown fox", "text-white text-lg font-sans"),
+		),
+
+		// Bundled serif font
+		retained.VStack("gap-1 w-full",
+			retained.Text("font-serif (Bundled TTF)", "text-gray-500 text-xs"),
+			retained.Text("The quick brown fox", "text-white text-lg font-serif"),
+		),
+
+		// System mono
+		retained.VStack("gap-1 w-full",
+			retained.Text("font-mono (System)", "text-gray-500 text-xs"),
+			retained.Text("The quick brown fox", "text-white text-lg font-mono"),
+		),
 	)
 
 	// Device Input Testing Card
@@ -256,6 +281,7 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		counterCard,
 		buttonRow,
 		inputCard,
+		fontCard,
 		deviceCard,
 		videoCard,
 		featureCard,

@@ -252,6 +252,35 @@ pub extern "C" fn centered_engine_version() -> *const c_char {
     "0.1.0\0".as_ptr() as *const c_char
 }
 
+/// Get the app's internal files directory path (Android only).
+/// Returns NULL on non-Android platforms or if not yet initialized.
+/// The returned string is owned by the engine - do NOT free it.
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub extern "C" fn centered_get_app_files_dir() -> *const c_char {
+    #[cfg(target_os = "android")]
+    {
+        use crate::platform::android::get_app_files_dir;
+        match get_app_files_dir() {
+            Some(path) => {
+                // Return as C string - caller must not free this
+                // We need a static CString, so we'll use a lazy static
+                use std::sync::OnceLock;
+                static FILES_DIR_CSTRING: OnceLock<std::ffi::CString> = OnceLock::new();
+                let cstr = FILES_DIR_CSTRING.get_or_init(|| {
+                    std::ffi::CString::new(path).unwrap_or_default()
+                });
+                cstr.as_ptr()
+            }
+            None => std::ptr::null(),
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        std::ptr::null()
+    }
+}
+
 // ============================================================================
 // FFI Render Command Structures (C-compatible)
 // ============================================================================

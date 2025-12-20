@@ -58,6 +58,15 @@ fn get_frame_duration_ms() -> u64 {
 pub static mut JAVA_VM: Option<JavaVM> = None;
 static mut ACTIVITY_CLASS: Option<GlobalRef> = None;
 static mut GO_ANDROID_MAIN_CLASS: Option<GlobalRef> = None;
+/// Path to the app's internal files directory (e.g., /data/data/com.example.app/files)
+/// This is where bundled assets like fonts should be copied for access.
+static mut APP_FILES_DIR: Option<String> = None;
+
+/// Get the app's internal files directory path.
+/// Returns None if not yet initialized.
+pub fn get_app_files_dir() -> Option<&'static str> {
+    unsafe { APP_FILES_DIR.as_deref() }
+}
 
 /// Get the activity pointer for JNI calls from other modules.
 /// Returns the raw activity pointer or null if not available.
@@ -991,6 +1000,21 @@ fn android_main(app: AndroidApp) {
                         if !activity_ptr.is_null() {
                             // Use ManuallyDrop to prevent JObject from deleting the reference we don't own
                             let activity = std::mem::ManuallyDrop::new(JObject::from_raw(activity_ptr as *mut _));
+
+                            // Get the app's internal files directory for bundled assets
+                            if let Ok(files_dir_obj) = env.call_method(&*activity, "getFilesDir", "()Ljava/io/File;", &[]) {
+                                if let Ok(files_dir) = files_dir_obj.l() {
+                                    if let Ok(path_val) = env.call_method(&files_dir, "getAbsolutePath", "()Ljava/lang/String;", &[]) {
+                                        if let Ok(path_obj) = path_val.l() {
+                                            if let Ok(path_str) = env.get_string((&path_obj).into()) {
+                                                let path = path_str.to_string_lossy().to_string();
+                                                info!("android_main: App files directory: {}", path);
+                                                APP_FILES_DIR = Some(path);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             // Get the activity's class loader
                             if let Ok(class_loader_val) = env.call_method(&*activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[]) {

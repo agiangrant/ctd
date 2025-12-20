@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // BuildAndroid implements the 'ctd build-android' command
@@ -122,6 +125,11 @@ func BuildAndroid(args []string) error {
 		}
 
 		fmt.Printf("  ✓ Copied to %s\n", dstPath)
+	}
+
+	// Copy bundled fonts to Android assets
+	if err := copyBundledFontsToAssets(*androidDir); err != nil {
+		fmt.Printf("Warning: %v\n", err)
 	}
 
 	fmt.Println("")
@@ -350,4 +358,80 @@ func startEmulator(name string) error {
 	}
 
 	return fmt.Errorf("emulator took too long to boot")
+}
+
+// ThemeConfig represents the theme.toml structure for font extraction
+type ThemeConfig struct {
+	Fonts map[string]string `toml:"fonts"`
+}
+
+// copyBundledFontsToAssets reads theme.toml and copies bundled fonts to Android assets
+func copyBundledFontsToAssets(androidDir string) error {
+	// Read theme.toml
+	themeData, err := os.ReadFile("theme.toml")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No theme.toml, nothing to copy
+		}
+		return fmt.Errorf("failed to read theme.toml: %w", err)
+	}
+
+	var theme ThemeConfig
+	if err := toml.Unmarshal(themeData, &theme); err != nil {
+		return fmt.Errorf("failed to parse theme.toml: %w", err)
+	}
+
+	if len(theme.Fonts) == 0 {
+		return nil // No fonts configured
+	}
+
+	// Find and copy bundled fonts
+	var copied int
+	for name, value := range theme.Fonts {
+		if !isBundledFontPath(value) {
+			continue // System font, skip
+		}
+
+		// Check if source file exists
+		if _, err := os.Stat(value); os.IsNotExist(err) {
+			fmt.Printf("  ⚠ Bundled font not found: %s (%s)\n", name, value)
+			continue
+		}
+
+		// Copy to Android assets directory
+		assetsDir := filepath.Join(androidDir, "app", "src", "main", "assets")
+		dstPath := filepath.Join(assetsDir, value)
+		dstDir := filepath.Dir(dstPath)
+
+		if err := os.MkdirAll(dstDir, 0755); err != nil {
+			return fmt.Errorf("failed to create assets directory %s: %w", dstDir, err)
+		}
+
+		if err := copyFile(value, dstPath); err != nil {
+			return fmt.Errorf("failed to copy font %s: %w", value, err)
+		}
+
+		copied++
+		fmt.Printf("  ✓ Copied font to %s\n", dstPath)
+	}
+
+	if copied > 0 {
+		fmt.Printf("Copied %d bundled font(s) to Android assets\n", copied)
+	}
+
+	return nil
+}
+
+// isBundledFontPath checks if a font value is a file path (bundled) vs system font name
+func isBundledFontPath(value string) bool {
+	lower := strings.ToLower(value)
+	if strings.HasSuffix(lower, ".ttf") || strings.HasSuffix(lower, ".otf") ||
+		strings.HasSuffix(lower, ".woff") || strings.HasSuffix(lower, ".woff2") {
+		return true
+	}
+	// Check for path separators (indicating a file path)
+	if strings.Contains(value, "/") || strings.Contains(value, "\\") {
+		return true
+	}
+	return false
 }

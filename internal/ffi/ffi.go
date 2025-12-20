@@ -139,6 +139,7 @@ var (
 
 	// Android-specific functions (only loaded on Android)
 	fnAndroidSetReadyCallback func(callback uintptr)
+	fnGetAppFilesDir          func() uintptr
 
 	// Clipboard functions (Rust implementation)
 	fnClipboardGet func() uintptr
@@ -368,6 +369,7 @@ func registerAndroidFunctions() {
 		return
 	}
 	purego.RegisterLibFunc(&fnAndroidSetReadyCallback, libHandle, "centered_android_set_ready_callback")
+	purego.RegisterLibFunc(&fnGetAppFilesDir, libHandle, "centered_get_app_files_dir")
 }
 
 func registerImageFunctions() {
@@ -1109,6 +1111,24 @@ func runAndroid(config AppConfig) error {
 	// We just need to block here to keep the goroutine alive.
 	// The callback will be invoked from Rust when the window is ready.
 	select {}
+}
+
+// GetAppFilesDir returns the app's internal files directory path (Android only).
+// This is where bundled assets like fonts should be copied for access.
+// Returns empty string on non-Android platforms or if not yet initialized.
+func GetAppFilesDir() string {
+	if runtime.GOOS != "android" {
+		return ""
+	}
+	if fnGetAppFilesDir == nil {
+		return ""
+	}
+	ptr := fnGetAppFilesDir()
+	if ptr == 0 {
+		return ""
+	}
+	// The pointer points to a C string owned by Rust - we can read but not free it
+	return goString(ptr)
 }
 
 // ============================================================================

@@ -589,17 +589,31 @@ func (l *Loop) Run(appConfig ffi.AppConfig) error {
 	l.lastFrameTime = l.startTime
 
 	// Preload bundled fonts from theme configuration.
-	// On native platforms this is a no-op (fonts load lazily).
-	// On web, this registers fonts with the browser before first render.
-	for name, config := range getThemeFonts() {
-		if config.IsBundled {
-			if err := ffi.LoadBundledFont(config.Value); err != nil {
-				fmt.Printf("Warning: failed to load bundled font '%s' (%s): %v\n", name, config.Value, err)
-			}
-		}
-	}
+	// On Android, copy fonts to app files directory first.
+	// On web, this registers fonts with the browser.
+	// On other native platforms, fonts load lazily.
+	preloadBundledFonts()
 
 	return ffi.Run(appConfig, l.handleEvent)
+}
+
+// preloadBundledFonts loads all bundled fonts from the theme configuration.
+// On Android, fonts are loaded from assets (copied during build via ctd build-android).
+// On web, this registers fonts with the browser's FontFace API.
+// On other native platforms, fonts load lazily from the filesystem.
+func preloadBundledFonts() {
+	fonts := getThemeFonts()
+
+	for name, config := range fonts {
+		if !config.IsBundled {
+			continue
+		}
+
+		// Call LoadBundledFont (no-op on native, registers on web)
+		if err := ffi.LoadBundledFont(config.Value); err != nil {
+			fmt.Printf("Warning: failed to load bundled font '%s' (%s): %v\n", name, config.Value, err)
+		}
+	}
 }
 
 // handleEvent is the FFI callback that drives the loop.
