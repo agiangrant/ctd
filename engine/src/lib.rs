@@ -12,6 +12,7 @@ extern crate objc;
 // Core modules
 pub mod audio;
 pub mod event;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ffi;
 pub mod geometry;
 pub mod image;

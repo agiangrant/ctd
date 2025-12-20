@@ -47,6 +47,7 @@ static SAFE_AREA_INSETS: Mutex<SafeAreaInsets> = Mutex::new(SafeAreaInsets {
 /// # Safety
 /// - config_json must be a valid null-terminated UTF-8 string
 /// - caller must eventually call centered_engine_destroy
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_init(config_json: *const c_char) -> EngineHandle {
     if config_json.is_null() {
@@ -77,6 +78,7 @@ pub unsafe extern "C" fn centered_engine_init(config_json: *const c_char) -> Eng
 /// # Safety
 /// - handle must be a valid handle from centered_engine_init
 /// - handle must not be used after this call
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_destroy(_handle: EngineHandle) {
     let mut map = ENGINE_MAP.lock().unwrap();
@@ -89,6 +91,7 @@ pub unsafe extern "C" fn centered_engine_destroy(_handle: EngineHandle) {
 /// # Safety
 /// - handle must be valid
 /// - frame_json must be a valid null-terminated UTF-8 string containing widget tree
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_submit_frame(
     _handle: EngineHandle,
@@ -125,6 +128,7 @@ pub unsafe extern "C" fn centered_engine_submit_frame(
 /// # Safety
 /// - handle must be valid
 /// - delta_json must be a valid null-terminated UTF-8 string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_submit_delta(
     _handle: EngineHandle,
@@ -165,6 +169,7 @@ pub unsafe extern "C" fn centered_engine_submit_delta(
 /// # Safety
 /// - handle must be valid
 /// - toml must be a valid null-terminated UTF-8 string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_load_styles(
     _handle: EngineHandle,
@@ -194,6 +199,7 @@ pub unsafe extern "C" fn centered_engine_load_styles(
 ///
 /// # Safety
 /// - handle must be valid
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_resize(
     _handle: EngineHandle,
@@ -211,6 +217,7 @@ pub unsafe extern "C" fn centered_engine_resize(
 /// # Safety
 /// - handle must be valid
 /// - Returns 0 for Immediate, 1 for Retained
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_get_mode(_handle: EngineHandle) -> i32 {
     let map = ENGINE_MAP.lock().unwrap();
@@ -229,6 +236,7 @@ pub unsafe extern "C" fn centered_engine_get_mode(_handle: EngineHandle) -> i32 
 /// # Safety
 /// - ptr must be a string returned by the engine
 /// - ptr must not be used after this call
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
@@ -238,6 +246,7 @@ pub unsafe extern "C" fn centered_free_string(ptr: *mut c_char) {
 
 /// Get version string (for debugging)
 /// Returns a static string (do NOT free)
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_engine_version() -> *const c_char {
     "0.1.0\0".as_ptr() as *const c_char
@@ -454,6 +463,7 @@ impl FFIRenderCommand {
 /// # Safety
 /// - commands_ptr must point to valid FFIRenderCommand array
 /// - All string pointers in commands must be valid UTF-8
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_engine_render_batch(
     _handle: EngineHandle,
@@ -484,19 +494,25 @@ pub unsafe extern "C" fn centered_engine_render_batch(
 // Platform Backend FFI - Window and Rendering Surface Management
 // ============================================================================
 
+// On wasm32, wgpu types don't implement Send/Sync (WebGPU is single-threaded).
+// The C FFI backend functions are not used on wasm32 - web uses wasm-bindgen in platform/web.rs.
+#[cfg(not(target_arch = "wasm32"))]
 use crate::platform::wgpu_backend::{SurfaceConfig, WgpuBackend};
 use crate::platform::window_styling::{apply_window_style, WindowStyleOptions};
 use std::sync::OnceLock;
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Global backend storage (single instance for now)
 static BACKEND: OnceLock<Mutex<Option<WgpuBackend>>> = OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Get the global backend storage
 /// Used by FFI functions and iOS platform to access the shared backend
 pub fn get_backend() -> &'static Mutex<Option<WgpuBackend>> {
     BACKEND.get_or_init(|| Mutex::new(None))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Set the global backend (used by iOS platform)
 pub fn set_backend(backend: WgpuBackend) {
     let lock = get_backend();
@@ -526,6 +542,8 @@ pub fn set_backend(backend: WgpuBackend) {
 /// # Safety
 /// - window_handle must be a valid native window/view pointer
 /// - The window must remain valid for the lifetime of the backend
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_init(
     window_handle: *mut std::ffi::c_void,
@@ -619,6 +637,8 @@ pub unsafe extern "C" fn centered_backend_init(
 /// # Safety
 /// - Must only be called once after centered_backend_init
 /// - No rendering calls should be made after this
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_destroy() {
     let backend_lock = get_backend();
@@ -637,6 +657,7 @@ pub unsafe extern "C" fn centered_backend_destroy() {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_resize(width: u32, height: u32, scale_factor: f64) -> i32 {
     let backend_lock = get_backend();
@@ -665,6 +686,7 @@ pub unsafe extern "C" fn centered_backend_resize(width: u32, height: u32, scale_
 ///
 /// # Safety
 /// - commands_json must be a valid null-terminated UTF-8 string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_render_frame(
     commands_json: *const c_char,
@@ -724,6 +746,7 @@ pub unsafe extern "C" fn centered_backend_render_frame(
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_begin_frame() -> i32 {
     // Currently a no-op, but reserved for future use (e.g., acquiring next swapchain image)
@@ -734,6 +757,7 @@ pub unsafe extern "C" fn centered_backend_begin_frame() -> i32 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_end_frame() -> i32 {
     // Currently handled within render_frame, but reserved for explicit control
@@ -764,6 +788,7 @@ use crate::image::LoadedImage;
 /// # Safety
 /// - data_ptr must point to valid memory of at least data_len bytes
 /// - The data is copied, so the caller can free data_ptr after this returns
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_load_image(
     data_ptr: *const u8,
@@ -815,6 +840,7 @@ pub unsafe extern "C" fn centered_backend_load_image(
 ///
 /// # Safety
 /// - path must be a valid null-terminated UTF-8 string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_load_image_file(
     path: *const c_char,
@@ -864,6 +890,7 @@ pub unsafe extern "C" fn centered_backend_load_image_file(
 /// 0 on success, negative error code on failure:
 /// - -1: Invalid texture ID
 /// - -2: Backend not initialized
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_unload_image(texture_id: u32) -> i32 {
     let backend_lock = get_backend();
@@ -892,6 +919,7 @@ pub unsafe extern "C" fn centered_backend_unload_image(texture_id: u32) -> i32 {
 ///
 /// # Safety
 /// - width_out and height_out must be valid pointers to u32
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_backend_get_texture_size(
     texture_id: u32,
@@ -938,6 +966,7 @@ lazy_static::lazy_static! {
 ///
 /// # Returns
 /// A unique player ID (always positive), or 0 on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_create() -> u32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -954,6 +983,7 @@ pub extern "C" fn centered_video_create() -> u32 {
 ///
 /// # Arguments
 /// * `player_id` - Player ID from centered_video_create
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_destroy(player_id: u32) {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -968,6 +998,7 @@ pub extern "C" fn centered_video_destroy(player_id: u32) {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_video_load_url(
     player_id: u32,
@@ -1004,6 +1035,7 @@ pub unsafe extern "C" fn centered_video_load_url(
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_video_load_file(
     player_id: u32,
@@ -1041,6 +1073,7 @@ pub unsafe extern "C" fn centered_video_load_file(
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_init_stream(
     player_id: u32,
@@ -1068,6 +1101,7 @@ pub extern "C" fn centered_video_init_stream(
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_video_push_frame(
     player_id: u32,
@@ -1099,6 +1133,7 @@ pub unsafe extern "C" fn centered_video_push_frame(
 }
 
 /// Start or resume video playback
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_play(player_id: u32) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1111,6 +1146,7 @@ pub extern "C" fn centered_video_play(player_id: u32) -> i32 {
 }
 
 /// Pause video playback
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_pause(player_id: u32) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1130,6 +1166,7 @@ pub extern "C" fn centered_video_pause(player_id: u32) -> i32 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_seek(player_id: u32, timestamp_ms: u64) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1144,6 +1181,7 @@ pub extern "C" fn centered_video_seek(player_id: u32, timestamp_ms: u64) -> i32 
 }
 
 /// Set looping behavior
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_set_looping(player_id: u32, looping: bool) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1156,6 +1194,7 @@ pub extern "C" fn centered_video_set_looping(player_id: u32, looping: bool) -> i
 }
 
 /// Set muted state
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_set_muted(player_id: u32, muted: bool) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1168,6 +1207,7 @@ pub extern "C" fn centered_video_set_muted(player_id: u32, muted: bool) -> i32 {
 }
 
 /// Set volume (0.0 - 1.0)
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_set_volume(player_id: u32, volume: f32) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1190,6 +1230,7 @@ pub extern "C" fn centered_video_set_volume(player_id: u32, volume: f32) -> i32 
 /// - 4: Ended
 /// - 5: Error
 /// - Negative: Player not found
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_get_state(player_id: u32) -> i32 {
     let players = VIDEO_PLAYERS.lock().unwrap();
@@ -1201,6 +1242,7 @@ pub extern "C" fn centered_video_get_state(player_id: u32) -> i32 {
 }
 
 /// Get current playback position in milliseconds
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_get_time(player_id: u32) -> u64 {
     let players = VIDEO_PLAYERS.lock().unwrap();
@@ -1221,6 +1263,7 @@ pub extern "C" fn centered_video_get_time(player_id: u32) -> u64 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_video_get_info(
     player_id: u32,
@@ -1257,6 +1300,7 @@ pub unsafe extern "C" fn centered_video_get_info(
 ///
 /// # Returns
 /// Texture ID if a frame is available (use with DrawImage), 0 if no frame, negative on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_update(player_id: u32) -> i32 {
     let mut players = VIDEO_PLAYERS.lock().unwrap();
@@ -1324,6 +1368,7 @@ pub extern "C" fn centered_video_update(player_id: u32) -> i32 {
 }
 
 /// Get texture ID for current video frame (without updating)
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_get_texture_id(player_id: u32) -> u32 {
     let players = VIDEO_PLAYERS.lock().unwrap();
@@ -2446,6 +2491,7 @@ impl App {
 /// - config.title must be a valid null-terminated UTF-8 string (or null for default)
 /// - callback must be a valid function pointer
 /// - user_data lifetime must exceed the application run
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_app_run(
     config: *const AppConfig,
@@ -2487,6 +2533,7 @@ pub unsafe extern "C" fn centered_app_run(
 /// }
 /// ```
 #[cfg(target_os = "ios")]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_ios_main(argc: i32, argv: *mut *mut i8) -> i32 {
     println!("[FFI] centered_ios_main called");
@@ -2964,6 +3011,7 @@ unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
             show_native_controls: config.show_native_controls,
             enable_minimize: config.enable_minimize,
             enable_maximize: config.enable_maximize,
+            target_fps: config.target_fps,
         },
         should_exit: false,
         modifiers: winit::keyboard::ModifiersState::empty(),
@@ -2981,6 +3029,7 @@ unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
 
 /// Request the application to exit
 /// Call this from within the callback to trigger a clean shutdown
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_app_request_exit() {
     // This is a hint; actual exit happens via CloseRequested handling
@@ -2993,6 +3042,7 @@ pub extern "C" fn centered_app_request_exit() {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_app_request_redraw() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3015,6 +3065,7 @@ pub extern "C" fn centered_app_request_redraw() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_window_minimize() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3033,6 +3084,7 @@ pub extern "C" fn centered_window_minimize() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_window_toggle_maximize() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3051,6 +3103,7 @@ pub extern "C" fn centered_window_toggle_maximize() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_window_enter_fullscreen() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3069,6 +3122,7 @@ pub extern "C" fn centered_window_enter_fullscreen() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_window_exit_fullscreen() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3087,6 +3141,7 @@ pub extern "C" fn centered_window_exit_fullscreen() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_window_toggle_fullscreen() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3105,6 +3160,7 @@ pub extern "C" fn centered_window_toggle_fullscreen() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_window_close() -> i32 {
     let guard = get_event_loop_proxy().lock().unwrap();
@@ -3126,6 +3182,7 @@ pub extern "C" fn centered_window_close() -> i32 {
 ///
 /// # Returns
 /// 0 on success, -1 if no event loop is running, -2 if title is invalid
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_window_set_title(title: *const c_char) -> i32 {
     if title.is_null() {
@@ -3178,6 +3235,7 @@ pub struct SafeAreaInsetsFFI {
 ///
 /// # Returns
 /// SafeAreaInsetsFFI struct with top, left, bottom, right values in logical pixels
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_get_safe_area_insets() -> SafeAreaInsetsFFI {
     let insets = SAFE_AREA_INSETS.lock().unwrap();
@@ -3195,6 +3253,7 @@ pub extern "C" fn centered_get_safe_area_insets() -> SafeAreaInsetsFFI {
 ///
 /// # Safety
 /// `out` must be a valid pointer to a SafeAreaInsetsFFI struct
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_get_safe_area_insets_ptr(out: *mut SafeAreaInsetsFFI) -> i32 {
     if out.is_null() {
@@ -3229,6 +3288,7 @@ fn update_safe_area_insets(top: f32, left: f32, bottom: f32, right: f32) {
 /// - 1 if dark mode is enabled
 /// - 0 if light mode is enabled
 /// - -1 if unable to determine (error or unsupported platform)
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_system_dark_mode() -> i32 {
     #[cfg(target_os = "macos")]
@@ -3340,6 +3400,7 @@ static CLIPBOARD_STRING: Mutex<Option<CString>> = Mutex::new(None);
 /// - Returns a pointer to internally managed memory
 /// - Caller must not free the returned pointer
 /// - Pointer is valid only until next centered_clipboard_get call
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_clipboard_get() -> *const c_char {
     #[cfg(target_os = "macos")]
@@ -3424,6 +3485,7 @@ pub extern "C" fn centered_clipboard_get() -> *const c_char {
 /// # Safety
 /// - text must be a valid null-terminated UTF-8 string, or null
 /// - If text is null, this function does nothing
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_clipboard_set(text: *const c_char) {
     if text.is_null() {
@@ -3487,6 +3549,7 @@ pub unsafe extern "C" fn centered_clipboard_set(text: *const c_char) {
 
 /// Show the software keyboard (iOS only)
 /// The view must be able to become first responder
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_keyboard_show() {
     #[cfg(target_os = "ios")]
@@ -3500,6 +3563,7 @@ pub extern "C" fn centered_keyboard_show() {
 }
 
 /// Hide the software keyboard
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_keyboard_hide() {
     #[cfg(target_os = "ios")]
@@ -3514,6 +3578,7 @@ pub extern "C" fn centered_keyboard_hide() {
 
 /// Check if keyboard is currently visible
 /// Returns 1 if visible, 0 if hidden
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_keyboard_is_visible() -> i32 {
     #[cfg(target_os = "ios")]
@@ -3551,6 +3616,7 @@ pub extern "C" fn centered_keyboard_is_visible() -> i32 {
 ///   - 22: Notification error
 ///
 /// On non-iOS platforms, this function does nothing.
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_haptic_feedback(style: i32) {
     #[cfg(target_os = "ios")]
@@ -3634,6 +3700,7 @@ pub extern "C" fn centered_haptic_feedback(style: i32) {
 ///
 /// # Safety
 /// This function is safe to call from any thread
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_get_natural_scrolling() -> i32 {
     #[cfg(target_os = "macos")]
@@ -3684,6 +3751,7 @@ pub extern "C" fn centered_get_natural_scrolling() -> i32 {
 /// # Safety
 /// - All string parameters must be null-terminated UTF-8 strings or null
 /// - Returned pointer must be freed with `centered_file_dialog_result_free`
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_file_dialog_open(
     title: *const c_char,
@@ -3813,6 +3881,7 @@ pub unsafe extern "C" fn centered_file_dialog_open(
 /// # Safety
 /// - All string parameters must be null-terminated UTF-8 strings or null
 /// - Returned pointer must be freed with `centered_file_dialog_result_free`
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_file_dialog_save(
     title: *const c_char,
@@ -3912,6 +3981,7 @@ pub unsafe extern "C" fn centered_file_dialog_save(
 /// # Safety
 /// - `result` must be a pointer returned by `centered_file_dialog_open` or `centered_file_dialog_save`
 /// - `result` must not be used after this call
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_file_dialog_result_free(result: *mut c_char) {
     if !result.is_null() {
@@ -4447,6 +4517,7 @@ mod tray_icon {
 }
 
 /// Create a system tray icon
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_create() -> i32 {
     #[cfg(target_os = "macos")]
@@ -4460,6 +4531,7 @@ pub extern "C" fn centered_tray_icon_create() -> i32 {
 }
 
 /// Destroy the tray icon
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_destroy() {
     #[cfg(target_os = "macos")]
@@ -4469,6 +4541,7 @@ pub extern "C" fn centered_tray_icon_destroy() {
 }
 
 /// Set tray icon from file
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_icon_file(path: *const c_char) -> i32 {
     #[cfg(target_os = "macos")]
@@ -4483,6 +4556,7 @@ pub unsafe extern "C" fn centered_tray_icon_set_icon_file(path: *const c_char) -
 }
 
 /// Set tray icon from raw image data
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_icon_data(data: *const u8, length: u64) -> i32 {
     #[cfg(target_os = "macos")]
@@ -4497,6 +4571,7 @@ pub unsafe extern "C" fn centered_tray_icon_set_icon_data(data: *const u8, lengt
 }
 
 /// Set tray icon tooltip
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_tooltip(tooltip: *const c_char) {
     #[cfg(target_os = "macos")]
@@ -4510,6 +4585,7 @@ pub unsafe extern "C" fn centered_tray_icon_set_tooltip(tooltip: *const c_char) 
 }
 
 /// Set tray icon title
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_title(title: *const c_char) {
     #[cfg(target_os = "macos")]
@@ -4523,6 +4599,7 @@ pub unsafe extern "C" fn centered_tray_icon_set_title(title: *const c_char) {
 }
 
 /// Clear tray menu
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_clear_menu() {
     #[cfg(target_os = "macos")]
@@ -4532,6 +4609,7 @@ pub extern "C" fn centered_tray_icon_clear_menu() {
 }
 
 /// Add menu item to tray
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_add_menu_item(
     label: *const c_char,
@@ -4551,6 +4629,7 @@ pub unsafe extern "C" fn centered_tray_icon_add_menu_item(
 }
 
 /// Set menu item enabled state
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_menu_item_enabled(index: i32, enabled: i32) {
     #[cfg(target_os = "macos")]
@@ -4564,6 +4643,7 @@ pub extern "C" fn centered_tray_icon_set_menu_item_enabled(index: i32, enabled: 
 }
 
 /// Set menu item checked state
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_menu_item_checked(index: i32, checked: i32) {
     #[cfg(target_os = "macos")]
@@ -4577,6 +4657,7 @@ pub extern "C" fn centered_tray_icon_set_menu_item_checked(index: i32, checked: 
 }
 
 /// Set menu item label
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_menu_item_label(index: i32, label: *const c_char) {
     #[cfg(target_os = "macos")]
@@ -4590,6 +4671,7 @@ pub unsafe extern "C" fn centered_tray_icon_set_menu_item_label(index: i32, labe
 }
 
 /// Set tray icon visibility
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_visible(visible: i32) {
     #[cfg(target_os = "macos")]
@@ -4603,6 +4685,7 @@ pub extern "C" fn centered_tray_icon_set_visible(visible: i32) {
 }
 
 /// Get tray icon visibility
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_is_visible() -> i32 {
     #[cfg(target_os = "macos")]
@@ -4616,6 +4699,7 @@ pub extern "C" fn centered_tray_icon_is_visible() -> i32 {
 }
 
 /// Set tray icon menu callback
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_callback(callback: extern "C" fn(i32)) {
     #[cfg(target_os = "macos")]
@@ -4643,6 +4727,7 @@ fn get_font_manager() -> &'static Mutex<FontManager> {
 
 /// Get the current backend scale factor (for HiDPI displays)
 /// Returns 1.0 if backend is not initialized
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_get_scale_factor() -> f64 {
     let backend_lock = get_backend();
@@ -4690,6 +4775,7 @@ pub struct TextMeasurement {
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_name must be a valid null-terminated UTF-8 string
 #[cfg(not(target_os = "android"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text(
     text: *const c_char,
@@ -4749,6 +4835,7 @@ pub unsafe extern "C" fn centered_measure_text(
 
 /// Android implementation using JNI Canvas API
 #[cfg(target_os = "android")]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text(
     text: *const c_char,
@@ -4836,6 +4923,7 @@ pub unsafe extern "C" fn centered_measure_text(
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_name must be a valid null-terminated UTF-8 string
 /// - out must be a valid pointer to a TextMeasurement struct
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_ptr(
     text: *const c_char,
@@ -4865,6 +4953,7 @@ pub unsafe extern "C" fn centered_measure_text_ptr(
 /// # Safety
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_name must be a valid null-terminated UTF-8 string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_width(
     text: *const c_char,
@@ -4896,6 +4985,7 @@ pub unsafe extern "C" fn centered_measure_text_width(
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_name must be a valid null-terminated UTF-8 string
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_to_cursor(
     text: *const c_char,
@@ -4970,6 +5060,7 @@ pub unsafe extern "C" fn centered_measure_text_to_cursor(
 /// - text must be a valid null-terminated UTF-8 string
 /// - font_json must be a valid null-terminated UTF-8 JSON string
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_with_font(
     text: *const c_char,
@@ -5034,6 +5125,7 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
 
 // Android implementations for text measurement using JNI Canvas API
 #[cfg(target_os = "android")]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_to_cursor(
     text: *const c_char,
@@ -5064,6 +5156,7 @@ pub unsafe extern "C" fn centered_measure_text_to_cursor(
 }
 
 #[cfg(target_os = "android")]
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_measure_text_with_font(
     text: *const c_char,
@@ -5121,6 +5214,7 @@ lazy_static::lazy_static! {
 ///
 /// # Returns
 /// A unique player ID (always positive), or 0 on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_create() -> u32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5137,6 +5231,7 @@ pub extern "C" fn centered_audio_create() -> u32 {
 ///
 /// # Arguments
 /// * `player_id` - Player ID from centered_audio_create
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_destroy(player_id: u32) {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5154,6 +5249,7 @@ pub extern "C" fn centered_audio_destroy(player_id: u32) {
 /// - -1: Invalid parameters
 /// - -2: Player not found
 /// - -3: Load failed
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_audio_load_url(
     player_id: u32,
@@ -5190,6 +5286,7 @@ pub unsafe extern "C" fn centered_audio_load_url(
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_audio_load_file(
     player_id: u32,
@@ -5222,6 +5319,7 @@ pub unsafe extern "C" fn centered_audio_load_file(
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_play(player_id: u32) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5239,6 +5337,7 @@ pub extern "C" fn centered_audio_play(player_id: u32) -> i32 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_pause(player_id: u32) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5256,6 +5355,7 @@ pub extern "C" fn centered_audio_pause(player_id: u32) -> i32 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_stop(player_id: u32) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5277,6 +5377,7 @@ pub extern "C" fn centered_audio_stop(player_id: u32) -> i32 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_seek(player_id: u32, timestamp_ms: u64) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5298,6 +5399,7 @@ pub extern "C" fn centered_audio_seek(player_id: u32, timestamp_ms: u64) -> i32 
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_set_looping(player_id: u32, looping: bool) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5317,6 +5419,7 @@ pub extern "C" fn centered_audio_set_looping(player_id: u32, looping: bool) -> i
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_set_volume(player_id: u32, volume: f32) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5339,6 +5442,7 @@ pub extern "C" fn centered_audio_set_volume(player_id: u32, volume: f32) -> i32 
 /// - 4: Ended
 /// - 5: Error
 /// - Negative: Player not found
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_get_state(player_id: u32) -> i32 {
     let players = AUDIO_PLAYERS.lock().unwrap();
@@ -5353,6 +5457,7 @@ pub extern "C" fn centered_audio_get_state(player_id: u32) -> i32 {
 ///
 /// # Returns
 /// Current position in milliseconds, or 0 if player not found
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_get_time(player_id: u32) -> u64 {
     let players = AUDIO_PLAYERS.lock().unwrap();
@@ -5373,6 +5478,7 @@ pub extern "C" fn centered_audio_get_time(player_id: u32) -> u64 {
 ///
 /// # Returns
 /// 0 on success, negative error code on failure
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_audio_get_info(
     player_id: u32,
@@ -5403,6 +5509,7 @@ pub unsafe extern "C" fn centered_audio_get_info(
 ///
 /// # Returns
 /// Volume (0.0 - 1.0), or 0.0 if player not found
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_get_volume(player_id: u32) -> f32 {
     let players = AUDIO_PLAYERS.lock().unwrap();
@@ -5417,6 +5524,7 @@ pub extern "C" fn centered_audio_get_volume(player_id: u32) -> f32 {
 ///
 /// # Returns
 /// 1 if looping, 0 if not looping or player not found
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_is_looping(player_id: u32) -> i32 {
     let players = AUDIO_PLAYERS.lock().unwrap();
@@ -5434,6 +5542,7 @@ pub extern "C" fn centered_audio_is_looping(player_id: u32) -> i32 {
 ///
 /// # Returns
 /// 1 if state changed, 0 if not, negative on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_update(player_id: u32) -> i32 {
     let mut players = AUDIO_PLAYERS.lock().unwrap();
@@ -5460,6 +5569,7 @@ lazy_static::lazy_static! {
 ///
 /// # Returns
 /// A unique input ID (always positive), or 0 on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_create() -> u32 {
     let mut inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5473,6 +5583,7 @@ pub extern "C" fn centered_audio_input_create() -> u32 {
 }
 
 /// Destroy an audio input and free resources
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_destroy(input_id: u32) {
     let mut inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5485,6 +5596,7 @@ pub extern "C" fn centered_audio_input_destroy(input_id: u32) {
 ///
 /// # Returns
 /// 0 on success, 1 if permission needs to be granted, negative on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_request_permission(input_id: u32) -> i32 {
     let mut inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5502,6 +5614,7 @@ pub extern "C" fn centered_audio_input_request_permission(input_id: u32) -> i32 
 ///
 /// # Returns
 /// 1 if granted, 0 if not
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_has_permission(input_id: u32) -> i32 {
     let inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5515,6 +5628,7 @@ pub extern "C" fn centered_audio_input_has_permission(input_id: u32) -> i32 {
 /// List available audio input devices
 /// Returns a JSON array of device info, or null on error
 /// Caller must free the returned string with centered_free_string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_list_devices(input_id: u32) -> *mut c_char {
     let inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5550,6 +5664,7 @@ pub extern "C" fn centered_audio_input_list_devices(input_id: u32) -> *mut c_cha
 ///
 /// # Returns
 /// 0 on success, negative on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_audio_input_open(
     input_id: u32,
@@ -5584,6 +5699,7 @@ pub unsafe extern "C" fn centered_audio_input_open(
 }
 
 /// Start capturing audio
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_start(input_id: u32) -> i32 {
     let mut inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5598,6 +5714,7 @@ pub extern "C" fn centered_audio_input_start(input_id: u32) -> i32 {
 }
 
 /// Stop capturing audio
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_stop(input_id: u32) -> i32 {
     let mut inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5612,6 +5729,7 @@ pub extern "C" fn centered_audio_input_stop(input_id: u32) -> i32 {
 }
 
 /// Close the audio input device
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_close(input_id: u32) {
     let mut inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5624,6 +5742,7 @@ pub extern "C" fn centered_audio_input_close(input_id: u32) {
 ///
 /// # Returns
 /// 0=Idle, 1=RequestingPermission, 2=Ready, 3=Capturing, 4=Stopped, 5=Error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_get_state(input_id: u32) -> i32 {
     let inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5635,6 +5754,7 @@ pub extern "C" fn centered_audio_input_get_state(input_id: u32) -> i32 {
 }
 
 /// Get current audio input level (0.0 - 1.0 RMS)
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_get_level(input_id: u32) -> f32 {
     let inputs = AUDIO_INPUTS.lock().unwrap();
@@ -5661,6 +5781,7 @@ lazy_static::lazy_static! {
 ///
 /// # Returns
 /// A unique input ID (always positive), or 0 on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_create() -> u32 {
     let mut inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5674,6 +5795,7 @@ pub extern "C" fn centered_video_input_create() -> u32 {
 }
 
 /// Destroy a video input and free resources
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_destroy(input_id: u32) {
     let mut inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5686,6 +5808,7 @@ pub extern "C" fn centered_video_input_destroy(input_id: u32) {
 ///
 /// # Returns
 /// 0 on success, 1 if permission needs to be granted, negative on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_request_permission(input_id: u32) -> i32 {
     let mut inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5703,6 +5826,7 @@ pub extern "C" fn centered_video_input_request_permission(input_id: u32) -> i32 
 ///
 /// # Returns
 /// 1 if granted, 0 if not
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_has_permission(input_id: u32) -> i32 {
     let inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5716,6 +5840,7 @@ pub extern "C" fn centered_video_input_has_permission(input_id: u32) -> i32 {
 /// List available video input devices (cameras)
 /// Returns a JSON array of device info, or null on error
 /// Caller must free the returned string with centered_free_string
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_list_devices(input_id: u32) -> *mut c_char {
     let inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5754,6 +5879,7 @@ pub extern "C" fn centered_video_input_list_devices(input_id: u32) -> *mut c_cha
 ///
 /// # Returns
 /// 0 on success, negative on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_video_input_open(
     input_id: u32,
@@ -5790,6 +5916,7 @@ pub unsafe extern "C" fn centered_video_input_open(
 }
 
 /// Start capturing video
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_start(input_id: u32) -> i32 {
     let mut inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5804,6 +5931,7 @@ pub extern "C" fn centered_video_input_start(input_id: u32) -> i32 {
 }
 
 /// Stop capturing video
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_stop(input_id: u32) -> i32 {
     let mut inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5818,6 +5946,7 @@ pub extern "C" fn centered_video_input_stop(input_id: u32) -> i32 {
 }
 
 /// Close the video input device
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_close(input_id: u32) {
     let mut inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5830,6 +5959,7 @@ pub extern "C" fn centered_video_input_close(input_id: u32) {
 ///
 /// # Returns
 /// 0=Idle, 1=RequestingPermission, 2=Ready, 3=Capturing, 4=Stopped, 5=Error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_get_state(input_id: u32) -> i32 {
     let inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5844,6 +5974,7 @@ pub extern "C" fn centered_video_input_get_state(input_id: u32) -> i32 {
 ///
 /// # Returns
 /// Width in the high 16 bits, height in the low 16 bits, or 0 on error
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_get_dimensions(input_id: u32, width_out: *mut u32, height_out: *mut u32) -> i32 {
     let inputs = VIDEO_INPUTS.lock().unwrap();
@@ -5878,6 +6009,7 @@ pub extern "C" fn centered_video_input_get_dimensions(input_id: u32, width_out: 
 /// - -2: Input not found
 /// - -3: No frame available
 /// - -4: Failed to upload to GPU
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_video_input_get_frame_texture(input_id: u32, _existing_texture_id: u32) -> i32 {
     // First get the latest frame
@@ -6070,6 +6202,7 @@ pub enum BatchResponseType {
 /// - request_ptr must point to valid memory of at least request_len bytes
 /// - response_ptr must point to valid memory of at least response_capacity bytes
 /// - response_len_out must point to valid u32
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_execute_batch(
     request_ptr: *const u8,

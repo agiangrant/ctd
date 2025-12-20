@@ -1,3 +1,5 @@
+//go:build !js
+
 // Package ffi provides Go bindings to the Centered Rust engine via purego.
 // This implementation uses purego for FFI, eliminating the need for CGo.
 // This enables cross-compilation and mobile platform support.
@@ -787,6 +789,7 @@ type FrameResponse struct {
 	WidgetDelta       interface{}
 	RequestRedraw     bool
 	RedrawAfterMs     uint32 // Schedule a redraw after N milliseconds (0 = no delayed redraw)
+	Exit              bool   // Request app exit
 }
 
 // EventHandler is called for each event from the engine

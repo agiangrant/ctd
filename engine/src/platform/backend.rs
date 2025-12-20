@@ -148,6 +148,7 @@ pub trait PlatformBackend: Sized {
 /// On Windows: HWND
 /// On Linux: X11 Window or Wayland surface
 /// On Android: ANativeWindow
+/// On Web: Canvas element ID
 pub struct NativeHandle {
     /// Raw window handle for wgpu
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -163,6 +164,10 @@ pub struct NativeHandle {
 
     #[cfg(target_os = "android")]
     pub a_native_window: *mut std::ffi::c_void,
+
+    /// Canvas element pointer (from wasm-bindgen)
+    #[cfg(target_arch = "wasm32")]
+    pub canvas_ptr: *mut std::ffi::c_void,
 }
 
 // SAFETY: NativeHandle contains raw pointers that are only used to create wgpu surfaces.
@@ -212,6 +217,14 @@ impl raw_window_handle::HasWindowHandle for NativeHandle {
             );
             Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(handle.into()) })
         }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let handle = raw_window_handle::WebCanvasWindowHandle::new(
+                std::ptr::NonNull::new(self.canvas_ptr).expect("canvas_ptr must be non-null")
+            );
+            Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(handle.into()) })
+        }
     }
 }
 
@@ -247,6 +260,12 @@ impl raw_window_handle::HasDisplayHandle for NativeHandle {
         #[cfg(target_os = "android")]
         {
             let handle = raw_window_handle::AndroidDisplayHandle::new();
+            Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(handle.into()) })
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let handle = raw_window_handle::WebDisplayHandle::new();
             Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(handle.into()) })
         }
     }

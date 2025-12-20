@@ -649,10 +649,14 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 	case ffi.EventMousePressed:
 		var x, y float32
 		var button MouseButton
-		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
-			// On mobile (iOS/Android), touch events send x/y coordinates directly
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" || runtime.GOOS == "js" {
+			// On mobile (iOS/Android) and web (js), events send x/y coordinates directly
 			x, y = float32(event.MouseX()), float32(event.MouseY())
-			button = MouseButtonLeft // Touch is always "left click"
+			if runtime.GOOS == "js" {
+				button = l.convertMouseButton(event.MouseButton())
+			} else {
+				button = MouseButtonLeft // Touch is always "left click"
+			}
 			// Update cached position for consistency
 			l.mouseX, l.mouseY = x, y
 		} else {
@@ -668,10 +672,14 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 	case ffi.EventMouseReleased:
 		var x, y float32
 		var button MouseButton
-		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
-			// On mobile (iOS/Android), touch events send x/y coordinates directly
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" || runtime.GOOS == "js" {
+			// On mobile (iOS/Android) and web (js), events send x/y coordinates directly
 			x, y = float32(event.MouseX()), float32(event.MouseY())
-			button = MouseButtonLeft // Touch is always "left click"
+			if runtime.GOOS == "js" {
+				button = l.convertMouseButton(event.MouseButton())
+			} else {
+				button = MouseButtonLeft // Touch is always "left click"
+			}
 			// Update cached position for consistency
 			l.mouseX, l.mouseY = x, y
 		} else {
@@ -686,11 +694,17 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 
 	case ffi.EventMouseWheel:
 		deltaX, deltaY := event.ScrollDelta()
+		// On web (js), the wheel event includes mouse position
+		if runtime.GOOS == "js" {
+			l.mouseX = float32(event.MouseX())
+			l.mouseY = float32(event.MouseY())
+		}
 		// On desktop, macOS/Windows provide scroll deltas with natural scrolling direction
 		// when the system preference is enabled. When natural scrolling is disabled (traditional),
 		// the delta direction is inverted. Our scroll logic expects natural scrolling direction,
 		// so we negate the delta when traditional scrolling is in use.
-		if runtime.GOOS != "ios" && !l.naturalScrolling {
+		// Web always uses natural scrolling.
+		if runtime.GOOS != "ios" && runtime.GOOS != "js" && !l.naturalScrolling {
 			deltaX = -deltaX
 			deltaY = -deltaY
 		}
@@ -1390,10 +1404,11 @@ func (l *Loop) renderWidgetAt(commands []ffi.RenderCommand, w *Widget, parentX, 
 		w.mu.RLock()
 	}
 
-	// Handle camera widgets - non-rendering data source for video capture
+	// Handle camera widgets - update state and render preview
 	if w.kind == KindCamera {
 		w.mu.RUnlock()
 		l.updateCamera(w)
+		commands = l.renderCamera(commands, w, renderX, renderY, widgetWidth, widgetHeight)
 		w.mu.RLock()
 	}
 
@@ -2352,6 +2367,8 @@ func (l *Loop) renderVideo(commands []ffi.RenderCommand, w *Widget, x, y, width,
 	naturalH := w.videoNaturalH
 	state := w.videoState
 	onEnded := w.onVideoEnded
+	imageFit := w.imageFit
+	imagePosition := w.imagePosition
 	w.mu.RUnlock()
 
 	// If no player and we have a source, create player and load video
@@ -2380,6 +2397,22 @@ func (l *Loop) renderVideo(commands []ffi.RenderCommand, w *Widget, x, y, width,
 			// Handle video ended callback
 			if newState == ffi.VideoStateEnded && onEnded != nil {
 				onEnded()
+			}
+		}
+
+		// Update natural dimensions if not yet available (web: metadata loads async)
+		if naturalW == 0 || naturalH == 0 {
+			info, err := ffi.VideoGetInfo(ffi.VideoPlayerID(playerID))
+			if err == nil && info != nil && info.Width > 0 && info.Height > 0 {
+				w.mu.Lock()
+				w.videoNaturalW = info.Width
+				w.videoNaturalH = info.Height
+				naturalW = info.Width
+				naturalH = info.Height
+				if info.DurationMs > 0 {
+					w.videoDurationMs = info.DurationMs
+				}
+				w.mu.Unlock()
 			}
 		}
 	}
@@ -2414,13 +2447,21 @@ func (l *Loop) renderVideo(commands []ffi.RenderCommand, w *Widget, x, y, width,
 		return commands
 	}
 
-	// Calculate video dimensions (default to "contain" fit for video)
+	// Calculate video dimensions using object-fit (default to "contain" for video)
 	imgX, imgY, imgW, imgH := x, y, width, height
 
 	// Apply object-fit logic using natural video dimensions
 	needsClip := false
 	if naturalW > 0 && naturalH > 0 {
-		imgX, imgY, imgW, imgH = calculateObjectFit("contain", "center", x, y, width, height, float32(naturalW), float32(naturalH))
+		fit := imageFit
+		if fit == "" {
+			fit = "contain" // Default for video
+		}
+		position := imagePosition
+		if position == "" {
+			position = "center"
+		}
+		imgX, imgY, imgW, imgH = calculateObjectFit(fit, position, x, y, width, height, float32(naturalW), float32(naturalH))
 		needsClip = imgX < x || imgY < y || imgX+imgW > x+width || imgY+imgH > y+height
 	}
 
@@ -2891,6 +2932,95 @@ func (l *Loop) updateCamera(w *Widget) {
 			}
 		}
 	}
+}
+
+// renderCamera renders a camera widget's preview frame.
+func (l *Loop) renderCamera(commands []ffi.RenderCommand, w *Widget, x, y, width, height float32) []ffi.RenderCommand {
+	w.mu.RLock()
+	textureID := w.camTextureID
+	cornerRadii := w.cornerRadius
+	state := w.camState
+	actualW := w.camActualWidth
+	actualH := w.camActualHeight
+	imageFit := w.imageFit
+	imagePosition := w.imagePosition
+	w.mu.RUnlock()
+
+	// If no texture yet, show placeholder
+	if textureID == 0 {
+		if state == int32(ffi.VideoInputStateCapturing) || state == int32(ffi.VideoInputStateRequestingPermission) {
+			// Show loading indicator (dark gray box)
+			commands = append(commands, ffi.RenderCommand{
+				DrawRect: &ffi.DrawRectCmd{
+					X:           x,
+					Y:           y,
+					Width:       width,
+					Height:      height,
+					Color:       0x374151FF, // gray-700
+					CornerRadii: cornerRadii,
+				},
+			})
+		} else {
+			// Show idle state (darker gray box)
+			commands = append(commands, ffi.RenderCommand{
+				DrawRect: &ffi.DrawRectCmd{
+					X:           x,
+					Y:           y,
+					Width:       width,
+					Height:      height,
+					Color:       0x1F2937FF, // gray-800
+					CornerRadii: cornerRadii,
+				},
+			})
+		}
+		return commands
+	}
+
+	// Calculate camera frame dimensions using object-fit
+	imgX, imgY, imgW, imgH := x, y, width, height
+
+	needsClip := false
+	if actualW > 0 && actualH > 0 {
+		fit := imageFit
+		if fit == "" {
+			fit = "cover" // Default for camera (fill the container)
+		}
+		position := imagePosition
+		if position == "" {
+			position = "center"
+		}
+		imgX, imgY, imgW, imgH = calculateObjectFit(fit, position, x, y, width, height, float32(actualW), float32(actualH))
+		needsClip = imgX < x || imgY < y || imgX+imgW > x+width || imgY+imgH > y+height
+	}
+
+	// Check if we have rounded corners
+	hasRounded := cornerRadii[0] > 0 || cornerRadii[1] > 0 || cornerRadii[2] > 0 || cornerRadii[3] > 0
+
+	// Push clip if camera frame extends outside container
+	if needsClip || hasRounded {
+		commands = append(commands, ffi.PushClip(x, y, width, height))
+	}
+
+	// Draw the camera frame
+	if hasRounded {
+		commands = append(commands, ffi.ImageWithCornerRadii(
+			ffi.TextureID(textureID),
+			imgX, imgY, imgW, imgH,
+			cornerRadii,
+		))
+	} else {
+		commands = append(commands, ffi.Image(
+			ffi.TextureID(textureID),
+			imgX, imgY, imgW, imgH,
+		))
+	}
+
+	// Pop clip if we pushed one
+	if needsClip || hasRounded {
+		commands = append(commands, ffi.PopClip())
+	}
+
+	return commands
 }
 
 // processPendingTextureUnloads unloads textures that were queued for deferred deletion.

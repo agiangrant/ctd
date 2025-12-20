@@ -1,3 +1,9 @@
+//go:build ignore
+
+// NOTE: This example uses a legacy API that was never fully implemented.
+// See examples/ios_demo for the modern retained mode API.
+// See examples/web_demo for the modern immediate mode API.
+
 package main
 
 import (

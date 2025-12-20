@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Centered Web Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #111827;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        #app {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #centered-canvas {
+            flex: 1;
+            width: 100%;
+            display: block;
+            touch-action: none;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #9CA3AF;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        #loading.hidden {
+            display: none;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #374151;
+            border-top-color: #3B82F6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        #error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #EF4444;
+            font-size: 16px;
+            text-align: center;
+            max-width: 80%;
+            display: none;
+        }
+
+        #error.visible {
+            display: block;
+        }
+
+        #console {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.9);
+            color: #10B981;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 8px;
+            display: none;
+        }
+
+        #console.visible {
+            display: block;
+        }
+
+        #console .log-entry {
+            margin: 2px 0;
+        }
+
+        #console .log-error {
+            color: #EF4444;
+        }
+
+        #console .log-warn {
+            color: #F59E0B;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <canvas id="centered-canvas"></canvas>
+    </div>
+
+    <div id="loading">
+        <div class="loading-spinner"></div>
+        <div>Loading Centered Web Demo...</div>
+        <div style="font-size: 14px; margin-top: 8px; color: #6B7280;">Go + Rust + WebAssembly</div>
+    </div>
+
+    <div id="error">
+        <div style="font-size: 24px; margin-bottom: 16px;">Error</div>
+        <div id="error-message"></div>
+    </div>
+
+    <div id="console"></div>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+        // Console logging capture (press ` to toggle)
+        const consoleEl = document.getElementById('console');
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+
+        function addLogEntry(message, type = 'log') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            consoleEl.appendChild(entry);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            addLogEntry(args.join(' '), 'log');
+        };
+
+        console.error = function(...args) {
+            originalError.apply(console, args);
+            addLogEntry(args.join(' '), 'error');
+        };
+
+        console.warn = function(...args) {
+            originalWarn.apply(console, args);
+            addLogEntry(args.join(' '), 'warn');
+        };
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === '`') {
+                consoleEl.classList.toggle('visible');
+            }
+        });
+
+        // Show error helper
+        function showError(message) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error').classList.add('visible');
+            document.getElementById('error-message').textContent = message;
+            console.error(message);
+        }
+
+        // Initialize and run
+        async function init() {
+            console.log('Initializing Centered Web Demo...');
+
+            // Check WebAssembly support
+            if (typeof WebAssembly === 'undefined') {
+                showError('WebAssembly is not supported in this browser');
+                return;
+            }
+
+            // Canvas sizing is handled by Go
+
+            try {
+                // Load Go WASM
+                console.log('Loading Go WASM...');
+                const go = new Go();
+
+                const result = await WebAssembly.instantiateStreaming(
+                    fetch('main.wasm'),
+                    go.importObject
+                );
+
+                console.log('Go WASM loaded successfully');
+
+                // Hide loading
+                document.getElementById('loading').classList.add('hidden');
+
+                // Run Go
+                console.log('Starting Go runtime...');
+                go.run(result.instance);
+
+            } catch (err) {
+                showError(`Failed to load: ${err.message}`);
+            }
+        }
+
+        // Start when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    </script>
+</body>
+</html>

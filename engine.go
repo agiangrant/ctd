@@ -1,3 +1,11 @@
+//go:build ignore
+
+// NOTE: This file contains a legacy API that was never fully implemented.
+// The modern API uses:
+//   - retained.Run() for retained mode widgets (see examples/ios_demo)
+//   - ffi.Run() for immediate mode (see examples/web_demo)
+// This file is excluded from builds until the legacy API is implemented or removed.
+
 package centered
 
 import (

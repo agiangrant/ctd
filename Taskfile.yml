@@ -242,3 +242,62 @@ tasks:
     desc: Show Android logcat filtered for Centered
     cmds:
       - adb logcat -s Centered:V centered_engine:V AndroidRuntime:E
+
+  # Web/WASM tasks
+  web:build:rust:
+    desc: Build Rust engine for WebAssembly
+    dir: '{{.ENGINE_DIR}}'
+    cmds:
+      - rustup target add wasm32-unknown-unknown 2>/dev/null || true
+      - cargo build --release --lib --target wasm32-unknown-unknown
+      - echo "Rust WASM built at target/wasm32-unknown-unknown/release/centered_engine.wasm"
+
+  web:build:go:
+    desc: Build Go demo for WebAssembly
+    cmds:
+      - mkdir -p examples/web_demo/dist
+      - |
+        # Go 1.24+ moved wasm_exec.js from misc/wasm to lib/wasm
+        GOROOT="$(go env GOROOT)"
+        if [ -f "$GOROOT/lib/wasm/wasm_exec.js" ]; then
+          cp "$GOROOT/lib/wasm/wasm_exec.js" examples/web_demo/dist/
+        elif [ -f "$GOROOT/misc/wasm/wasm_exec.js" ]; then
+          cp "$GOROOT/misc/wasm/wasm_exec.js" examples/web_demo/dist/
+        else
+          echo "Error: wasm_exec.js not found in GOROOT"
+          exit 1
+        fi
+      - cp examples/web_demo/index.html examples/web_demo/dist/
+      - GOOS=js GOARCH=wasm go build -o examples/web_demo/dist/main.wasm ./examples/web_demo
+      - echo "Go WASM built at examples/web_demo/dist/main.wasm"
+
+  web:build:
+    desc: Build both Rust and Go for WebAssembly
+    cmds:
+      - task: web:build:rust
+      - task: web:build:go
+      - |
+        # Copy Rust WASM to dist
+        mkdir -p examples/web_demo/dist
+        cp {{.ENGINE_DIR}}/target/wasm32-unknown-unknown/release/centered_engine.wasm examples/web_demo/dist/
+      - echo "Web build complete! Files in examples/web_demo/dist/"
+
+  web:serve:
+    desc: Serve web demo locally (requires Python 3)
+    dir: examples/web_demo/dist
+    cmds:
+      - echo "Serving at http://localhost:8080"
+      - python3 -m http.server 8080
+
+  web:dev:
+    desc: Build and serve web demo
+    cmds:
+      - task: web:build
+      - task: web:serve
+
+  web:clean:
+    desc: Clean web build artifacts
+    cmds:
+      - rm -rf examples/web_demo/dist
+      - rm -rf {{.ENGINE_DIR}}/target/wasm32-unknown-unknown
+      - echo "Web build artifacts cleaned"

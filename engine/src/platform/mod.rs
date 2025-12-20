@@ -21,6 +21,10 @@ pub mod ios;
 #[cfg(target_os = "android")]
 pub mod android;
 
+// Web/WASM platform backend
+#[cfg(target_arch = "wasm32")]
+pub mod web;
+
 // macOS native backend - kept for reference but not used (winit works fine on macOS)
 // Uncomment to use direct AppKit instead of winit
 // #[cfg(target_os = "macos")]
@@ -31,9 +35,12 @@ pub use backend::{AppConfig, EventCallback, EventResponse, PlatformBackend, Plat
 pub use wgpu_backend::{SurfaceConfig, WgpuBackend};
 pub use window_styling::{apply_window_style, WindowStyleOptions};
 
-// Platform-specific backend alias (iOS and Android use native backends, others use winit)
+// Platform-specific backend alias (iOS, Android, and Web use native backends, others use winit)
 #[cfg(target_os = "ios")]
 pub use ios::IosBackend as NativeBackend;
 
 #[cfg(target_os = "android")]
 pub use android::AndroidBackend as NativeBackend;
+
+#[cfg(target_arch = "wasm32")]
+pub use web::WebBackend as NativeBackend;

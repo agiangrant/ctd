@@ -495,6 +495,7 @@ pub use stub::StubGlyphRasterizer as PlatformGlyphRasterizer;
 #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 mod stub {
     use super::*;
+    use crate::text::FontDescriptor;
 
     /// Stub glyph rasterizer for platforms without text rendering support.
     /// Returns None for all rasterization requests.
@@ -510,7 +511,7 @@ mod stub {
         fn rasterize_glyph(
             &mut self,
             _character: char,
-            _font: &super::FontDescriptor,
+            _font: &FontDescriptor,
         ) -> Option<GlyphBitmap> {
             // Glyph rasterization not supported on this platform
             None
