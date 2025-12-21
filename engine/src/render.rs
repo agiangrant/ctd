@@ -241,7 +241,7 @@ pub enum RenderCommand {
 
     // ===== State Commands =====
 
-    /// Begin a clip region
+    /// Begin a rectangular clip region (scissor-based, fast)
     PushClip {
         x: f32,
         y: f32,
@@ -249,7 +249,18 @@ pub enum RenderCommand {
         height: f32,
     },
 
-    /// End the current clip region
+    /// Begin a rounded clip region (stencil-based, for rounded corners)
+    /// All subsequent drawing will be masked to this rounded rectangle
+    PushRoundedClip {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        /// Corner radii: [top-left, top-right, bottom-right, bottom-left]
+        corner_radii: [f32; 4],
+    },
+
+    /// End the current clip region (works for both PushClip and PushRoundedClip)
     PopClip {},
 
     /// Begin a scroll view region

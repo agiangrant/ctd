@@ -4,8 +4,10 @@
 //! - Dark mode detection
 //! - Accent color
 //! - Other desktop settings
+//! - Runtime theme change notifications
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::runtime::Runtime;
 use zbus::{Connection, Result as ZbusResult};
 
@@ -49,14 +51,11 @@ async fn is_dark_mode_async() -> ZbusResult<bool> {
     // The reply is a variant containing a variant containing a u32
     // 0 = no preference, 1 = prefer dark, 2 = prefer light
     let body = reply.body();
-    if let Ok(value) = body.deserialize::<zbus::zvariant::OwnedValue>() {
-        // Try to extract the nested value
-        // The portal returns v(v(u)) - variant of variant of u32
-        if let Ok(inner) = value.try_to_owned() {
-            if let Ok(scheme) = inner.try_into() {
-                let scheme: u32 = scheme;
-                return Ok(scheme == 1); // 1 = prefer dark
-            }
+    if let Ok(outer) = body.deserialize::<zbus::zvariant::OwnedValue>() {
+        use zbus::zvariant::Value;
+        // downcast_ref unwraps variant layers automatically
+        if let Ok(Value::U32(scheme)) = outer.downcast_ref::<Value>() {
+            return Ok(scheme == 1); // 1 = prefer dark
         }
     }
 
@@ -139,6 +138,72 @@ async fn get_contrast_async() -> ZbusResult<u32> {
     }
 
     Ok(0)
+}
+
+/// Global flag to track if the theme listener is running
+static THEME_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Start listening for system theme changes
+///
+/// This spawns a background task that monitors D-Bus for theme change signals.
+/// When the system theme changes, it calls the provided callback with the new
+/// dark mode state.
+///
+/// The callback should send a message to the main event loop to update the UI.
+pub fn start_theme_listener<F>(on_change: F)
+where
+    F: Fn(bool) + Send + 'static,
+{
+    // Only start one listener
+    if THEME_LISTENER_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    get_runtime().spawn(async move {
+        if let Err(e) = listen_for_theme_changes(on_change).await {
+            eprintln!("Theme listener error: {:?}", e);
+        }
+        THEME_LISTENER_RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Async implementation of theme change listening
+async fn listen_for_theme_changes<F>(on_change: F) -> ZbusResult<()>
+where
+    F: Fn(bool) + Send + 'static,
+{
+    use futures_util::StreamExt;
+
+    let connection = Connection::session().await?;
+
+    // Subscribe to SettingChanged signal
+    // Signal: org.freedesktop.portal.Settings.SettingChanged(s namespace, s key, v value)
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface("org.freedesktop.portal.Settings")?
+        .member("SettingChanged")?
+        .build();
+
+    let mut stream = zbus::MessageStream::for_match_rule(rule, &connection, None).await?;
+
+    while let Some(msg) = stream.next().await {
+        if let Ok(msg) = msg {
+            // Parse the signal body: (s namespace, s key, v value)
+            let body = msg.body();
+            if let Ok((namespace, key, value)) = body.deserialize::<(String, String, zbus::zvariant::OwnedValue)>() {
+                if namespace == "org.freedesktop.appearance" && key == "color-scheme" {
+                    // Extract the u32 value from the variant
+                    use zbus::zvariant::Value;
+                    if let Ok(Value::U32(scheme)) = value.downcast_ref::<Value>() {
+                        let is_dark = scheme == 1;
+                        on_change(is_dark);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Check if natural scrolling is enabled

@@ -646,6 +646,7 @@ dependencies = [
  "euclid",
  "fontconfig",
  "freetype-rs",
+ "futures-util",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",

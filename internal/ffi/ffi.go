@@ -211,6 +211,8 @@ type FrameResponseC struct {
 	ImmediateCommands uintptr
 	WidgetDelta       uintptr
 	RequestRedraw     bool
+	RedrawAfterMs     uint32
+	DarkMode          uint8 // 0 = light, 1 = dark, 2 = auto/system
 }
 
 // AppConfigC matches the C struct layout for app configuration
@@ -237,6 +239,7 @@ type AppConfigC struct {
 	ShowNativeControls    bool
 	EnableMinimize        bool
 	EnableMaximize        bool
+	DarkMode              uint8 // 0 = light, 1 = dark, 2 = auto/system
 }
 
 // getLibraryPath returns the path to the dynamic library
@@ -792,6 +795,7 @@ type FrameResponse struct {
 	RequestRedraw     bool
 	RedrawAfterMs     uint32 // Schedule a redraw after N milliseconds (0 = no delayed redraw)
 	Exit              bool   // Request app exit
+	DarkMode          uint8  // 0 = light, 1 = dark, 2 = auto/system
 }
 
 // EventHandler is called for each event from the engine
@@ -832,6 +836,7 @@ type AppConfig struct {
 	ShowNativeControls bool
 	EnableMinimize     bool
 	EnableMaximize     bool
+	DarkMode           uint8 // 0 = light, 1 = dark, 2 = auto/system
 }
 
 // DefaultAppConfig returns sensible defaults
@@ -914,6 +919,8 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
 	// Write response to memory
 	response := (*FrameResponseC)(unsafe.Pointer(responsePtr))
 	response.RequestRedraw = goResponse.RequestRedraw
+	response.RedrawAfterMs = goResponse.RedrawAfterMs
+	response.DarkMode = goResponse.DarkMode
 	response.ImmediateCommands = 0
 	response.WidgetDelta = 0
 
@@ -930,8 +937,12 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
 				runtime.KeepAlive(b)
 			}
 		} else {
+			// On Linux, always use JSON path so Rust can add window controls
+			// (binary path renders directly, preventing Rust from adding overlays)
+			useJSON := runtime.GOOS == "linux"
+
 			transport := GetTransport()
-			if transport != nil && transport.Mode() == TransportSharedMemory {
+			if !useJSON && transport != nil && transport.Mode() == TransportSharedMemory {
 				_ = RenderFrameBinary(goResponse.ImmediateCommands)
 			} else {
 				jsonBytes, err := json.Marshal(goResponse.ImmediateCommands)
@@ -997,6 +1008,7 @@ func iosReadyCallback() {
 		ShowNativeControls:    config.ShowNativeControls,
 		EnableMinimize:        config.EnableMinimize,
 		EnableMaximize:        config.EnableMaximize,
+		DarkMode:              config.DarkMode,
 	}
 
 	// Keep titleBytes alive
@@ -1076,6 +1088,7 @@ func androidReadyCallback() {
 		ShowNativeControls:    config.ShowNativeControls,
 		EnableMinimize:        config.EnableMinimize,
 		EnableMaximize:        config.EnableMaximize,
+		DarkMode:              config.DarkMode,
 	}
 
 	// Keep titleBytes alive
@@ -1200,6 +1213,7 @@ func Run(config AppConfig, handler EventHandler) error {
 		ShowNativeControls:    config.ShowNativeControls,
 		EnableMinimize:        config.EnableMinimize,
 		EnableMaximize:        config.EnableMaximize,
+		DarkMode:              config.DarkMode,
 	}
 
 	// Keep titleBytes alive

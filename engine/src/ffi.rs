@@ -1454,6 +1454,9 @@ enum UserEvent {
     Close,
     /// Set window title
     SetTitle(String),
+    /// System theme changed (Linux only) - true = dark mode
+    #[cfg(target_os = "linux")]
+    SystemThemeChanged(bool),
 }
 
 /// Global event loop proxy for requesting redraws from any thread
@@ -1518,6 +1521,8 @@ pub struct AppConfig {
     pub enable_minimize: bool,
     /// Enable the maximize/zoom button (only used if show_native_controls = true)
     pub enable_maximize: bool,
+    /// Dark mode for window controls: 0 = light, 1 = dark, 2 = auto/system
+    pub dark_mode: u8,
 }
 
 /// Event type for FFI
@@ -1582,6 +1587,9 @@ pub struct FrameResponse {
     /// Schedule a redraw after N milliseconds (0 = no delayed redraw)
     /// Used for cursor blink, delayed animations, etc.
     pub redraw_after_ms: u32,
+    /// Dark mode for window controls: 0 = light, 1 = dark, 2 = auto/system
+    /// Updated each frame to allow runtime changes
+    pub dark_mode: u8,
 }
 
 /// Callback function type for the application loop
@@ -1639,6 +1647,15 @@ struct App {
     modifiers: winit::keyboard::ModifiersState,
     // Scheduled redraw time (for cursor blink, etc.)
     next_redraw_at: Option<std::time::Instant>,
+    // Linux-specific: window controls and resize handling
+    #[cfg(target_os = "linux")]
+    mouse_position: (f64, f64),
+    #[cfg(target_os = "linux")]
+    resize_direction: Option<winit::window::ResizeDirection>,
+    #[cfg(target_os = "linux")]
+    window_controls: Option<crate::platform::linux::WindowControls>,
+    #[cfg(target_os = "linux")]
+    current_dark_mode: u8,
 }
 
 // Modifier flags for keyboard events (passed in data2)
@@ -1875,6 +1892,10 @@ impl ApplicationHandler<UserEvent> for App {
                 // Call Go callback and render
                 let response = self.call_callback(&app_event);
 
+                // Linux: update window controls theme if dark mode changed
+                #[cfg(target_os = "linux")]
+                self.update_dark_mode(response.dark_mode);
+
                 // Render frame
                 {
                     let backend_lock = get_backend();
@@ -1890,6 +1911,79 @@ impl ApplicationHandler<UserEvent> for App {
                                 Err(e) => {
                                     eprintln!("Failed to parse immediate commands: {}", e);
                                 }
+                            }
+                        }
+
+                        // Linux frameless window: add rounded corner clipping, window controls, and border
+                        #[cfg(target_os = "linux")]
+                        {
+                            if !all_commands.is_empty() && !self.config.decorations {
+                                let window_radius = crate::platform::linux::WINDOW_CORNER_RADIUS;
+
+                                // Extract the background color from Clear command and replace with transparent
+                                // This is needed because the render pass clear happens BEFORE stencil clipping,
+                                // so we need to draw the background as a rect INSIDE the stencil clip instead.
+                                let mut bg_color: Option<crate::style::Color> = None;
+                                for cmd in all_commands.iter_mut() {
+                                    if let RenderCommand::Clear(color) = cmd {
+                                        bg_color = Some(*color);
+                                        // Replace with transparent clear
+                                        *color = crate::style::Color { r: 0, g: 0, b: 0, a: 0 };
+                                        break;
+                                    }
+                                }
+
+                                // Insert rounded corner clipping at the beginning (after Clear)
+                                let rounded_clip = RenderCommand::PushRoundedClip {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: logical_width as f32,
+                                    height: logical_height as f32,
+                                    corner_radii: [window_radius, window_radius, window_radius, window_radius],
+                                };
+
+                                // Find the position after Clear command (if any)
+                                let insert_pos = all_commands.iter()
+                                    .position(|cmd| !matches!(cmd, RenderCommand::Clear(_)))
+                                    .unwrap_or(0);
+                                all_commands.insert(insert_pos, rounded_clip);
+
+                                // If we had a background color, draw it as a fullscreen rect right after PushRoundedClip
+                                // This rect will be clipped to the rounded corners by the stencil
+                                if let Some(color) = bg_color {
+                                    let bg_rect = RenderCommand::DrawRect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: logical_width as f32,
+                                        height: logical_height as f32,
+                                        color: ((color.r as u32) << 24) | ((color.g as u32) << 16) | ((color.b as u32) << 8) | (color.a as u32),
+                                        corner_radii: [0.0, 0.0, 0.0, 0.0], // No corner radius needed, stencil handles it
+                                        rotation: 0.0,
+                                        border: None,
+                                        gradient: None,
+                                    };
+                                    // Insert right after the PushRoundedClip
+                                    all_commands.insert(insert_pos + 1, bg_rect);
+                                }
+
+                                // Add window controls (inside the clipped area)
+                                if let Some(ref controls) = self.window_controls {
+                                    let control_commands = controls.to_render_commands(logical_width as f32);
+                                    all_commands.extend(control_commands);
+                                }
+
+                                // End rounded corner clipping before drawing border
+                                all_commands.push(RenderCommand::PopClip {});
+
+                                // Add window border (rendered last, on top as outline, outside clip)
+                                let is_dark = self.current_dark_mode == 1 ||
+                                    (self.current_dark_mode == 2 && crate::platform::linux::is_dark_mode());
+                                let border_cmd = crate::platform::linux::window_border_command(
+                                    logical_width as f32,
+                                    logical_height as f32,
+                                    is_dark,
+                                );
+                                all_commands.push(border_cmd);
                             }
                         }
 
@@ -1949,6 +2043,21 @@ impl ApplicationHandler<UserEvent> for App {
                     window.set_title(&title);
                 }
             }
+            #[cfg(target_os = "linux")]
+            UserEvent::SystemThemeChanged(is_dark) => {
+                // Update window controls based on system theme change
+                // Only applies when app is in "auto" mode (dark_mode == 2)
+                if self.current_dark_mode == 2 {
+                    let new_mode = if is_dark { 1 } else { 0 };
+                    if let Some(ref mut controls) = self.window_controls {
+                        controls.update_theme_from_app(new_mode);
+                    }
+                    // Request a redraw to show updated controls
+                    if let Some(ref window) = self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
         }
     }
 
@@ -1970,11 +2079,17 @@ impl ApplicationHandler<UserEvent> for App {
         };
 
         // Create window with all config options
+        // On Linux, frameless windows need transparency for rounded corners
+        #[cfg(target_os = "linux")]
+        let needs_transparent = self.config.transparent || !self.config.decorations;
+        #[cfg(not(target_os = "linux"))]
+        let needs_transparent = self.config.transparent;
+
         let mut window_attrs = Window::default_attributes()
             .with_title(&title)
             .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
             .with_decorations(self.config.decorations)
-            .with_transparent(self.config.transparent)
+            .with_transparent(needs_transparent)
             .with_resizable(self.config.resizable);
 
         // Set min/max size constraints if specified
@@ -2137,6 +2252,16 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 self.call_callback(&event);
 
+                // Linux: update maximize button state after resize
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref mut controls) = self.window_controls {
+                        if let Some(ref window) = self.window {
+                            controls.maximize_state.maximized = window.is_maximized();
+                        }
+                    }
+                }
+
                 // Request redraw after resize
                 if let Some(ref window) = self.window {
                     window.request_redraw();
@@ -2159,6 +2284,10 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // Call Go callback and get response
                 let response = self.call_callback(&event);
+
+                // Linux: update window controls theme if dark mode changed
+                #[cfg(target_os = "linux")]
+                self.update_dark_mode(response.dark_mode);
 
                 // Process retained mode widget delta (if any)
                 // TODO: Apply widget_delta to internal widget tree
@@ -2189,6 +2318,81 @@ impl ApplicationHandler<UserEvent> for App {
                                 Err(e) => {
                                     eprintln!("Failed to parse immediate commands: {}", e);
                                 }
+                            }
+                        }
+
+                        // Linux frameless window: add rounded corner clipping, window controls, and border
+                        // IMPORTANT: Only add if Go sent commands via JSON (not binary path)
+                        // If Go used RenderFrameBinary, it already rendered and we'd cause a double-clear
+                        #[cfg(target_os = "linux")]
+                        {
+                            if !all_commands.is_empty() && !self.config.decorations {
+                                let window_radius = crate::platform::linux::WINDOW_CORNER_RADIUS;
+
+                                // Extract the background color from Clear command and replace with transparent
+                                // This is needed because the render pass clear happens BEFORE stencil clipping,
+                                // so we need to draw the background as a rect INSIDE the stencil clip instead.
+                                let mut bg_color: Option<crate::style::Color> = None;
+                                for cmd in all_commands.iter_mut() {
+                                    if let RenderCommand::Clear(color) = cmd {
+                                        bg_color = Some(*color);
+                                        // Replace with transparent clear
+                                        *color = crate::style::Color { r: 0, g: 0, b: 0, a: 0 };
+                                        break;
+                                    }
+                                }
+
+                                // Insert rounded corner clipping at the beginning (after Clear)
+                                let rounded_clip = RenderCommand::PushRoundedClip {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: logical_width as f32,
+                                    height: logical_height as f32,
+                                    corner_radii: [window_radius, window_radius, window_radius, window_radius],
+                                };
+
+                                // Find the position after Clear command (if any)
+                                let insert_pos = all_commands.iter()
+                                    .position(|cmd| !matches!(cmd, RenderCommand::Clear(_)))
+                                    .unwrap_or(0);
+                                all_commands.insert(insert_pos, rounded_clip);
+
+                                // If we had a background color, draw it as a fullscreen rect right after PushRoundedClip
+                                // This rect will be clipped to the rounded corners by the stencil
+                                if let Some(color) = bg_color {
+                                    let bg_rect = RenderCommand::DrawRect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: logical_width as f32,
+                                        height: logical_height as f32,
+                                        color: ((color.r as u32) << 24) | ((color.g as u32) << 16) | ((color.b as u32) << 8) | (color.a as u32),
+                                        corner_radii: [0.0, 0.0, 0.0, 0.0], // No corner radius needed, stencil handles it
+                                        rotation: 0.0,
+                                        border: None,
+                                        gradient: None,
+                                    };
+                                    // Insert right after the PushRoundedClip
+                                    all_commands.insert(insert_pos + 1, bg_rect);
+                                }
+
+                                // Add window controls (inside the clipped area)
+                                if let Some(ref controls) = self.window_controls {
+                                    let control_commands = controls.to_render_commands(logical_width as f32);
+                                    all_commands.extend(control_commands);
+                                }
+
+                                // End rounded corner clipping before drawing border
+                                all_commands.push(RenderCommand::PopClip {});
+
+                                // Add window border (rendered last, on top as outline, outside clip)
+                                let is_dark = self.current_dark_mode == 1 ||
+                                    (self.current_dark_mode == 2 && crate::platform::linux::is_dark_mode());
+                                let border_cmd = crate::platform::linux::window_border_command(
+                                    logical_width as f32,
+                                    logical_height as f32,
+                                    is_dark,
+                                );
+                                all_commands.push(border_cmd);
                             }
                         }
 
@@ -2233,10 +2437,65 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let scale_factor = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
                 // Convert to logical pixels to match our coordinate system
+                let logical_x = position.x / scale_factor;
+                let logical_y = position.y / scale_factor;
+
+                // Linux: track mouse position for window controls and resize
+                #[cfg(target_os = "linux")]
+                {
+                    self.mouse_position = (logical_x, logical_y);
+
+                    // Update window control hover states
+                    if let Some(ref mut controls) = self.window_controls {
+                        let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
+                        let window_width = size.width as f32 / scale_factor as f32;
+                        if controls.update_hover(logical_x as f32, logical_y as f32, window_width) {
+                            // Hover state changed, request redraw
+                            if let Some(ref window) = self.window {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+
+                    // Update cursor for resize edges on frameless windows
+                    if !self.config.decorations && self.config.resizable {
+                        use crate::platform::linux::window_controls::{detect_resize_edge, HEADER_HEIGHT};
+                        let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
+                        let window_width = size.width as f32 / scale_factor as f32;
+                        let window_height = size.height as f32 / scale_factor as f32;
+
+                        // Don't show resize cursor in header area (where controls are)
+                        let edge = if logical_y as f32 > HEADER_HEIGHT || self.window_controls.is_none() {
+                            detect_resize_edge(logical_x as f32, logical_y as f32, window_width, window_height)
+                        } else {
+                            None
+                        };
+
+                        // Update cursor based on edge
+                        if let Some(ref window) = self.window {
+                            use winit::window::CursorIcon;
+                            let cursor = match edge {
+                                Some(crate::platform::linux::window_controls::ResizeEdge::Top) |
+                                Some(crate::platform::linux::window_controls::ResizeEdge::Bottom) => CursorIcon::NsResize,
+                                Some(crate::platform::linux::window_controls::ResizeEdge::Left) |
+                                Some(crate::platform::linux::window_controls::ResizeEdge::Right) => CursorIcon::EwResize,
+                                Some(crate::platform::linux::window_controls::ResizeEdge::TopLeft) |
+                                Some(crate::platform::linux::window_controls::ResizeEdge::BottomRight) => CursorIcon::NwseResize,
+                                Some(crate::platform::linux::window_controls::ResizeEdge::TopRight) |
+                                Some(crate::platform::linux::window_controls::ResizeEdge::BottomLeft) => CursorIcon::NeswResize,
+                                None => CursorIcon::Default,
+                            };
+                            window.set_cursor(cursor);
+                        }
+
+                        self.resize_direction = edge.map(|e| e.to_resize_direction());
+                    }
+                }
+
                 let event = AppEvent {
                     event_type: AppEventType::MouseMoved,
-                    data1: position.x / scale_factor,
-                    data2: position.y / scale_factor,
+                    data1: logical_x,
+                    data2: logical_y,
                     scale_factor,
                 };
                 let response = self.call_callback(&event);
@@ -2248,7 +2507,99 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
 
+            WindowEvent::CursorLeft { .. } => {
+                // Linux: clear hover states when cursor leaves window
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref mut controls) = self.window_controls {
+                        controls.clear_hover();
+                        if let Some(ref window) = self.window {
+                            window.request_redraw();
+                        }
+                    }
+                }
+            }
+
             WindowEvent::MouseInput { state, button, .. } => {
+                // Linux: handle window control clicks and resize
+                #[cfg(target_os = "linux")]
+                {
+                    if button == winit::event::MouseButton::Left && state == ElementState::Pressed {
+                        let scale_factor = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+                        let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
+                        let window_width = size.width as f32 / scale_factor as f32;
+
+                        // Check for window control button clicks
+                        if let Some(ref controls) = self.window_controls {
+                            use crate::platform::linux::window_controls::ButtonKind;
+                            if let Some(kind) = controls.hit_test(self.mouse_position.0 as f32, self.mouse_position.1 as f32, window_width) {
+                                match kind {
+                                    ButtonKind::Close => {
+                                        // Send close event to Go callback
+                                        let close_event = AppEvent {
+                                            event_type: AppEventType::CloseRequested,
+                                            data1: 0.0,
+                                            data2: 0.0,
+                                            scale_factor: 1.0,
+                                        };
+                                        let _ = self.call_callback(&close_event);
+                                        self.should_exit = true;
+                                        event_loop.exit();
+                                        return;
+                                    }
+                                    ButtonKind::Minimize => {
+                                        if let Some(ref window) = self.window {
+                                            window.set_minimized(true);
+                                        }
+                                        return; // Don't pass to Go
+                                    }
+                                    ButtonKind::Maximize => {
+                                        if let Some(ref window) = self.window {
+                                            if window.is_maximized() {
+                                                window.set_maximized(false);
+                                            } else {
+                                                window.set_maximized(true);
+                                            }
+                                            // Update maximized state in controls
+                                            if let Some(ref mut controls) = self.window_controls {
+                                                controls.maximize_state.maximized = window.is_maximized();
+                                            }
+                                            window.request_redraw();
+                                        }
+                                        return; // Don't pass to Go
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check for resize edge drag
+                        if let Some(direction) = self.resize_direction {
+                            if let Some(ref window) = self.window {
+                                let _ = window.drag_resize_window(direction);
+                            }
+                            return; // Don't pass to Go
+                        }
+
+                        // Check for title bar drag (header area, excluding buttons)
+                        if !self.config.decorations {
+                            use crate::platform::linux::window_controls::HEADER_HEIGHT;
+                            let (mx, my) = self.mouse_position;
+                            if my < HEADER_HEIGHT as f64 {
+                                // In header area - check if not on a button
+                                let on_button = self.window_controls.as_ref()
+                                    .map(|c| c.hit_test(mx as f32, my as f32, window_width).is_some())
+                                    .unwrap_or(false);
+                                if !on_button {
+                                    if let Some(ref window) = self.window {
+                                        let _ = window.drag_window();
+                                    }
+                                    return; // Don't pass to Go
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let event_type = match state {
                     ElementState::Pressed => AppEventType::MousePressed,
                     ElementState::Released => AppEventType::MouseReleased,
@@ -2458,6 +2809,7 @@ struct ProcessedResponse {
     widget_delta: Option<String>,
     request_redraw: bool,
     redraw_after_ms: u32,
+    dark_mode: u8,
 }
 
 impl App {
@@ -2468,6 +2820,7 @@ impl App {
             widget_delta: ptr::null_mut(),
             request_redraw: false,
             redraw_after_ms: 0,
+            dark_mode: 2, // Default to auto/system
         };
 
         // Call the Go callback
@@ -2479,19 +2832,20 @@ impl App {
             );
         }
 
-        // Process the response, taking ownership of any strings
+        // Process the response - read strings WITHOUT taking ownership
+        // Go allocated this memory, so we must NOT free it
         let immediate_commands = if response.immediate_commands.is_null() {
             None
         } else {
-            let c_str = unsafe { CString::from_raw(response.immediate_commands) };
-            c_str.into_string().ok()
+            let c_str = unsafe { CStr::from_ptr(response.immediate_commands) };
+            c_str.to_str().ok().map(String::from)
         };
 
         let widget_delta = if response.widget_delta.is_null() {
             None
         } else {
-            let c_str = unsafe { CString::from_raw(response.widget_delta) };
-            c_str.into_string().ok()
+            let c_str = unsafe { CStr::from_ptr(response.widget_delta) };
+            c_str.to_str().ok().map(String::from)
         };
 
         ProcessedResponse {
@@ -2499,6 +2853,18 @@ impl App {
             widget_delta,
             request_redraw: response.request_redraw,
             redraw_after_ms: response.redraw_after_ms,
+            dark_mode: response.dark_mode,
+        }
+    }
+
+    /// Update window controls theme if dark mode changed (Linux only)
+    #[cfg(target_os = "linux")]
+    fn update_dark_mode(&mut self, new_dark_mode: u8) {
+        if new_dark_mode != self.current_dark_mode {
+            self.current_dark_mode = new_dark_mode;
+            if let Some(ref mut controls) = self.window_controls {
+                controls.update_theme_from_app(new_dark_mode);
+            }
         }
     }
 
@@ -3019,6 +3385,15 @@ unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
         *guard = Some(proxy);
     }
 
+    // Start listening for system theme changes (Linux only)
+    #[cfg(target_os = "linux")]
+    {
+        let theme_proxy = event_loop.create_proxy();
+        crate::platform::linux::start_theme_listener(move |is_dark| {
+            let _ = theme_proxy.send_event(UserEvent::SystemThemeChanged(is_dark));
+        });
+    }
+
     // Set control flow to wait for events (saves CPU)
     event_loop.set_control_flow(ControlFlow::Wait);
 
@@ -3053,10 +3428,28 @@ unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
             enable_minimize: config.enable_minimize,
             enable_maximize: config.enable_maximize,
             target_fps: config.target_fps,
+            dark_mode: config.dark_mode,
         },
         should_exit: false,
         modifiers: winit::keyboard::ModifiersState::empty(),
         next_redraw_at: None,
+        #[cfg(target_os = "linux")]
+        mouse_position: (0.0, 0.0),
+        #[cfg(target_os = "linux")]
+        resize_direction: None,
+        #[cfg(target_os = "linux")]
+        window_controls: if !config.decorations && config.show_native_controls {
+            Some(crate::platform::linux::WindowControls::with_dark_mode(
+                true, // close
+                config.enable_minimize,
+                config.enable_maximize,
+                config.dark_mode,
+            ))
+        } else {
+            None
+        },
+        #[cfg(target_os = "linux")]
+        current_dark_mode: config.dark_mode,
     };
 
     // Run the event loop (blocks until exit)
@@ -3375,29 +3768,13 @@ pub extern "C" fn centered_system_dark_mode() -> i32 {
 
     #[cfg(target_os = "linux")]
     {
-        // Check GTK settings or freedesktop portal
-        // For now, check the GTK_THEME environment variable or gsettings
-        if let Ok(theme) = std::env::var("GTK_THEME") {
-            if theme.to_lowercase().contains("dark") {
-                return 1;
-            }
+        // Use the XDG Desktop Portal for accurate dark mode detection
+        // This is what libadwaita and modern GNOME apps use
+        // The portal reflects the actual appearance, not just user preference
+        if crate::platform::linux::is_dark_mode() {
+            return 1;
         }
-
-        // Try to read from dconf/gsettings (org.gnome.desktop.interface color-scheme)
-        // This is a simplified check - a full implementation would use dbus
-        if let Ok(output) = std::process::Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("dark") {
-                return 1;
-            }
-            if stdout.contains("light") || stdout.contains("default") {
-                return 0;
-            }
-        }
-        0 // Default to light mode
+        0
     }
 
     #[cfg(target_os = "ios")]

@@ -497,6 +497,26 @@ func (l *Loop) DarkMode() bool {
 	return l.darkMode
 }
 
+// darkModeFFI returns the dark mode value for FFI (0=light, 1=dark, 2=auto).
+func (l *Loop) darkModeFFI() uint8 {
+	switch l.colorScheme {
+	case ColorSchemeLight:
+		return 0
+	case ColorSchemeDark:
+		return 1
+	default: // ColorSchemeSystem
+		return 2 // auto - Rust will detect and respond to OS theme changes
+	}
+}
+
+// response creates a FrameResponse with DarkMode already set.
+func (l *Loop) response(requestRedraw bool) ffi.FrameResponse {
+	return ffi.FrameResponse{
+		RequestRedraw: requestRedraw,
+		DarkMode:      l.darkModeFFI(),
+	}
+}
+
 // ColorScheme returns the current color scheme setting.
 func (l *Loop) ColorScheme() ColorScheme {
 	return l.colorScheme
@@ -588,6 +608,9 @@ func (l *Loop) Run(appConfig ffi.AppConfig) error {
 	l.startTime = time.Now()
 	l.lastFrameTime = l.startTime
 
+	// Set dark mode in app config based on loop's color scheme
+	appConfig.DarkMode = l.darkModeFFI()
+
 	// Preload bundled fonts from theme configuration.
 	// On Android, copy fonts to app files directory first.
 	// On web, this registers fonts with the browser.
@@ -621,7 +644,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 	// Let user handle event first (they can consume it)
 	if l.onEvent != nil && l.onEvent(event) {
 		// User consumed the event - only redraw if they modified widget state
-		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+		return l.response(l.tree.HasPendingUpdates())
 	}
 
 	switch event.Type {
@@ -634,7 +657,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		if l.onResize != nil {
 			l.onResize(width, height)
 		}
-		return ffi.FrameResponse{RequestRedraw: true}
+		return l.response(true)
 
 	case ffi.EventResized:
 		width, height := float32(event.Data1), float32(event.Data2)
@@ -653,7 +676,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		if l.onResize != nil {
 			l.onResize(width, height)
 		}
-		return ffi.FrameResponse{RequestRedraw: true}
+		return l.response(true)
 
 	case ffi.EventRedrawRequested:
 		return l.tick()
@@ -661,7 +684,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 	case ffi.EventCloseRequested:
 		l.running.Store(false)
 		l.tree.Close()
-		return ffi.FrameResponse{}
+		return l.response(false)
 
 	case ffi.EventMouseMoved:
 		x, y := float32(event.MouseX()), float32(event.MouseY())
@@ -669,7 +692,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		hoverChanged := l.events.DispatchMouseMove(x, y, l.convertModifiers(event.Modifiers()))
 		// Request redraw if hover state changed OR if event handlers modified widget state
 		needsRedraw := hoverChanged || l.tree.HasPendingUpdates()
-		return ffi.FrameResponse{RequestRedraw: needsRedraw}
+		return l.response(needsRedraw)
 
 	case ffi.EventMousePressed:
 		var x, y float32
@@ -692,7 +715,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		}
 		l.events.DispatchMouseDown(x, y, button, l.convertModifiers(event.Modifiers()))
 		// Always redraw on press to show active state
-		return ffi.FrameResponse{RequestRedraw: true}
+		return l.response(true)
 
 	case ffi.EventMouseReleased:
 		var x, y float32
@@ -715,7 +738,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		}
 		l.events.DispatchMouseUp(x, y, button, l.convertModifiers(event.Modifiers()))
 		// Always redraw on release to clear active state
-		return ffi.FrameResponse{RequestRedraw: true}
+		return l.response(true)
 
 	case ffi.EventMouseWheel:
 		deltaX, deltaY := event.ScrollDelta()
@@ -735,7 +758,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		}
 		l.events.DispatchMouseWheel(l.mouseX, l.mouseY, float32(deltaX), float32(deltaY), 0)
 		// Only redraw if event handlers modified widget state (e.g., scroll position)
-		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+		return l.response(l.tree.HasPendingUpdates())
 
 	case ffi.EventKeyPressed:
 		keyCode := event.Keycode()
@@ -744,7 +767,7 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		// TODO: detect repeat (not currently exposed by FFI)
 		l.events.DispatchKeyDown(keyCode, key, mods, false)
 		// Only redraw if event handlers modified widget state
-		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+		return l.response(l.tree.HasPendingUpdates())
 
 	case ffi.EventKeyReleased:
 		keyCode := event.Keycode()
@@ -752,14 +775,14 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		mods := l.convertModifiers(event.Modifiers())
 		l.events.DispatchKeyUp(keyCode, key, mods)
 		// Only redraw if event handlers modified widget state
-		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+		return l.response(l.tree.HasPendingUpdates())
 
 	case ffi.EventCharInput:
 		char := event.Char()
 		mods := l.convertModifiers(event.Modifiers())
 		l.events.DispatchKeyPress(char, mods)
 		// Only redraw if event handlers modified widget state
-		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+		return l.response(l.tree.HasPendingUpdates())
 
 	case ffi.EventKeyboardFrameChanged:
 		keyboardHeight := float32(event.Data1)
@@ -769,10 +792,10 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		if keyboardHeight > 0 {
 			l.scrollToKeepFocusedInputVisible(animationDuration)
 		}
-		return ffi.FrameResponse{RequestRedraw: l.tree.HasPendingUpdates()}
+		return l.response(l.tree.HasPendingUpdates())
 	}
 
-	return ffi.FrameResponse{}
+	return l.response(false)
 }
 
 // scrollToKeepFocusedInputVisible scrolls the nearest scrollable parent to ensure
@@ -1000,7 +1023,7 @@ func (l *Loop) tick() ffi.FrameResponse {
 
 	if l.paused.Load() {
 		// When paused, still request redraw if animations or momentum scrolling are active
-		return ffi.FrameResponse{RequestRedraw: l.animations.HasActive() || l.events.IsMomentumScrolling()}
+		return l.response(l.animations.HasActive() || l.events.IsMomentumScrolling())
 	}
 
 	now := time.Now()
@@ -1082,6 +1105,7 @@ func (l *Loop) tick() ffi.FrameResponse {
 		ImmediateCommands: commands,
 		RequestRedraw:     needsContinuousRedraw,
 		RedrawAfterMs:     redrawAfterMs,
+		DarkMode:          l.darkModeFFI(),
 	}
 }
 

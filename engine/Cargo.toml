@@ -106,6 +106,7 @@ tray-icon = { version = "0.19", default-features = false }  # System tray icons 
 notify-rust = "4"             # Desktop notifications
 zbus = { version = "4", default-features = false, features = ["tokio"] }  # D-Bus for XDG portals
 tokio = { version = "1", features = ["rt-multi-thread"] }  # Async runtime for zbus
+futures-util = "0.3"          # StreamExt for D-Bus signal listening
 # Audio playback and capture
 rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }  # Audio playback
 cpal = "0.15"                 # Audio input/output

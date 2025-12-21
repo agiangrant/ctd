@@ -86,6 +86,24 @@ struct GpuTexture {
     height: u32,
 }
 
+/// Stencil clip state for rounded corner clipping
+#[derive(Debug, Clone)]
+struct StencilClipState {
+    /// Whether stencil clipping is active
+    active: bool,
+    /// The rounded clip region (x, y, width, height, corner_radii)
+    region: Option<(f32, f32, f32, f32, [f32; 4])>,
+}
+
+impl Default for StencilClipState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            region: None,
+        }
+    }
+}
+
 /// wgpu rendering backend
 pub struct WgpuBackend {
     // wgpu core
@@ -95,6 +113,12 @@ pub struct WgpuBackend {
     queue: Option<wgpu::Queue>,
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
+
+    // Stencil buffer for rounded corner clipping
+    stencil_texture: Option<wgpu::Texture>,
+    stencil_view: Option<wgpu::TextureView>,
+    stencil_pipeline: Option<wgpu::RenderPipeline>,
+    stencil_clip_state: StencilClipState,
 
     // Render pipeline for text
     text_pipeline: Option<wgpu::RenderPipeline>,
@@ -184,6 +208,10 @@ impl WgpuBackend {
             image_pipeline: None,
             image_bind_group_layout: None,
             next_texture_id: 1,
+            stencil_texture: None,
+            stencil_view: None,
+            stencil_pipeline: None,
+            stencil_clip_state: StencilClipState::default(),
         }
     }
 
@@ -274,6 +302,14 @@ impl WgpuBackend {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
+        // Prefer alpha modes that support transparency (PreMultiplied > PostMultiplied > Auto > Opaque)
+        let alpha_mode = surface_caps.alpha_modes.iter()
+            .find(|m| **m == wgpu::CompositeAlphaMode::PreMultiplied)
+            .or_else(|| surface_caps.alpha_modes.iter().find(|m| **m == wgpu::CompositeAlphaMode::PostMultiplied))
+            .or_else(|| surface_caps.alpha_modes.iter().find(|m| **m == wgpu::CompositeAlphaMode::Auto))
+            .copied()
+            .unwrap_or(surface_caps.alpha_modes[0]);
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -284,7 +320,7 @@ impl WgpuBackend {
             } else {
                 wgpu::PresentMode::AutoNoVsync
             },
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -307,6 +343,10 @@ impl WgpuBackend {
         // Create image rendering pipeline
         let (image_pipeline, image_bind_group_layout) = self.create_image_pipeline(&device, &surface_config)?;
 
+        // Create stencil texture and pipeline for rounded corner clipping
+        let (stencil_texture, stencil_view) = self.create_stencil_texture(&device, config.width, config.height);
+        let stencil_pipeline = self.create_stencil_pipeline(&device, &surface_config)?;
+
         self.adapter = Some(adapter);
         self.device = Some(device);
         self.queue = Some(queue);
@@ -318,6 +358,9 @@ impl WgpuBackend {
         self.geometry_pipeline = Some(geometry_pipeline);
         self.image_pipeline = Some(image_pipeline);
         self.image_bind_group_layout = Some(image_bind_group_layout);
+        self.stencil_texture = Some(stencil_texture);
+        self.stencil_view = Some(stencil_view);
+        self.stencil_pipeline = Some(stencil_pipeline);
 
         Ok(())
     }
@@ -339,6 +382,137 @@ impl WgpuBackend {
         });
 
         Ok(texture)
+    }
+
+    /// Create or recreate the stencil texture for rounded corner clipping
+    fn create_stencil_texture(&self, device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Stencil Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Stencil8,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        (texture, view)
+    }
+
+    /// Create the stencil-write pipeline for drawing rounded rect masks
+    fn create_stencil_pipeline(
+        &self,
+        device: &wgpu::Device,
+        surface_config: &wgpu::SurfaceConfiguration,
+    ) -> Result<wgpu::RenderPipeline, Box<dyn Error>> {
+        // Shader that outputs a dummy color (write_mask prevents actual writes)
+        let shader_source = r#"
+            struct VertexInput {
+                @location(0) position: vec2<f32>,
+            }
+
+            struct VertexOutput {
+                @builtin(position) clip_position: vec4<f32>,
+            }
+
+            @vertex
+            fn vs_main(in: VertexInput) -> VertexOutput {
+                var out: VertexOutput;
+                // Position is already in clip space (-1 to 1)
+                out.clip_position = vec4<f32>(in.position, 0.0, 1.0);
+                return out;
+            }
+
+            @fragment
+            fn fs_main() -> @location(0) vec4<f32> {
+                // Dummy color output (write_mask prevents actual writes)
+                return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            }
+        "#;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Stencil Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Stencil Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Stencil Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 8, // 2 floats * 4 bytes
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x2,
+                    }],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                // Match surface format but don't write any color (stencil-only)
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(), // Don't write to color buffer
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Stencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState {
+                    front: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Always,
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Replace, // Write reference value
+                    },
+                    back: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Always,
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Replace,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0xFF,
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Ok(pipeline)
     }
 
     fn create_text_pipeline(
@@ -445,7 +619,29 @@ impl WgpuBackend {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // Stencil testing for rounded corner clipping
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Stencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState {
+                    front: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Equal, // Only draw where stencil == reference
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Keep,
+                    },
+                    back: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Equal,
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Keep,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0x00, // Don't write to stencil
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -506,7 +702,29 @@ impl WgpuBackend {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // Stencil testing for rounded corner clipping
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Stencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState {
+                    front: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Equal, // Only draw where stencil == reference
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Keep,
+                    },
+                    back: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Equal,
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Keep,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0x00, // Don't write to stencil
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -591,7 +809,29 @@ impl WgpuBackend {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // Stencil testing for rounded corner clipping
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Stencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState {
+                    front: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Equal, // Only draw where stencil == reference
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Keep,
+                    },
+                    back: wgpu::StencilFaceState {
+                        compare: wgpu::CompareFunction::Equal,
+                        fail_op: wgpu::StencilOperation::Keep,
+                        depth_fail_op: wgpu::StencilOperation::Keep,
+                        pass_op: wgpu::StencilOperation::Keep,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0x00, // Don't write to stencil
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -926,6 +1166,11 @@ impl WgpuBackend {
                 config.height = actual_height.max(1);
                 surface.configure(device, config);
             }
+
+            // Recreate stencil texture with new dimensions
+            let (stencil_texture, stencil_view) = self.create_stencil_texture(device, actual_width.max(1), actual_height.max(1));
+            self.stencil_texture = Some(stencil_texture);
+            self.stencil_view = Some(stencil_view);
         }
 
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -951,7 +1196,10 @@ impl WgpuBackend {
             })
             .unwrap_or(wgpu::Color::BLACK);
 
-        // Begin render pass
+        // Get stencil view reference for render pass
+        let stencil_view = self.stencil_view.as_ref().ok_or("Stencil view not initialized")?;
+
+        // Begin render pass with stencil attachment
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -963,14 +1211,25 @@ impl WgpuBackend {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: stencil_view,
+                    depth_ops: None, // No depth buffer
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0), // Clear stencil to 0
+                        store: wgpu::StoreOp::Store,
+                    }),
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
 
+            // Set initial stencil reference to 0 (stencil buffer is 0, so all pixels pass)
+            render_pass.set_stencil_reference(0);
+
             // Clear scissor stack and scroll offset stack at start of frame
             self.scissor_stack.clear();
             self.scroll_offset_stack.clear();
+            self.stencil_clip_state = StencilClipState::default();
 
             // Set initial scissor to full viewport using actual frame dimensions
             let scale = self.scale_factor as f32;
@@ -1023,15 +1282,40 @@ impl WgpuBackend {
                         render_pass.set_scissor_rect(clamped_rect.x, clamped_rect.y, clamped_rect.width.max(1), clamped_rect.height.max(1));
                     }
                     RenderCommand::PopClip {} => {
-                        // Pop from stack
-                        self.scissor_stack.pop();
-
-                        // Restore parent scissor or full viewport
-                        if let Some(parent) = self.scissor_stack.last() {
-                            render_pass.set_scissor_rect(parent.x, parent.y, parent.width.max(1), parent.height.max(1));
+                        // Check if this is a stencil clip pop
+                        if self.stencil_clip_state.active {
+                            // Restore stencil reference to 0 (no clipping)
+                            // Note: The stencil buffer still has 1s from the mask, but with
+                            // reference = 0, nothing will pass. For proper nesting, we'd need
+                            // to clear the stencil by drawing a fullscreen quad.
+                            // For MVP window-level clipping, we don't pop until frame end.
+                            render_pass.set_stencil_reference(0);
+                            self.stencil_clip_state.active = false;
+                            self.stencil_clip_state.region = None;
                         } else {
-                            render_pass.set_scissor_rect(0, 0, full_width, full_height);
+                            // Regular scissor pop
+                            self.scissor_stack.pop();
+
+                            // Restore parent scissor or full viewport
+                            if let Some(parent) = self.scissor_stack.last() {
+                                render_pass.set_scissor_rect(parent.x, parent.y, parent.width.max(1), parent.height.max(1));
+                            } else {
+                                render_pass.set_scissor_rect(0, 0, full_width, full_height);
+                            }
                         }
+                    }
+                    RenderCommand::PushRoundedClip { x, y, width, height, corner_radii } => {
+                        // Draw rounded rectangle mask to stencil buffer
+                        self.render_stencil_mask(&mut render_pass, *x, *y, *width, *height, *corner_radii)?;
+
+                        // After drawing the mask, set stencil reference to 1
+                        // Content pipelines test: stencil == reference
+                        // Now only pixels inside the rounded rect (stencil = 1) will pass
+                        render_pass.set_stencil_reference(1);
+
+                        // Track stencil clip state
+                        self.stencil_clip_state.active = true;
+                        self.stencil_clip_state.region = Some((*x, *y, *width, *height, *corner_radii));
                     }
                     RenderCommand::BeginScrollView { x, y, width, height, scroll_x, scroll_y, .. } => {
                         // Calculate scroll offset from EXISTING parent scroll views
@@ -1174,6 +1458,15 @@ impl WgpuBackend {
             surface.configure(device, config);
         }
 
+        // Recreate stencil texture with new dimensions (separate block to avoid borrow conflict)
+        if let Some(device) = &self.device {
+            let stencil_width = width.max(1);
+            let stencil_height = height.max(1);
+            let (stencil_texture, stencil_view) = self.create_stencil_texture(device, stencil_width, stencil_height);
+            self.stencil_texture = Some(stencil_texture);
+            self.stencil_view = Some(stencil_view);
+        }
+
         Ok(())
     }
 
@@ -1216,6 +1509,75 @@ impl WgpuBackend {
         render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
         // Draw indexed triangles
+        render_pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
+
+        Ok(())
+    }
+
+    /// Render a rounded rectangle to the stencil buffer for clipping
+    #[allow(clippy::too_many_arguments)]
+    fn render_stencil_mask(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        corner_radii: [f32; 4],
+    ) -> Result<(), Box<dyn Error>> {
+        let device = self.device.as_ref().ok_or("Device not initialized")?;
+        let pipeline = self.stencil_pipeline.as_ref().ok_or("Stencil pipeline not initialized")?;
+
+        // Scale coordinates for HiDPI
+        let scale = self.scale_factor as f32;
+        let scaled_x = x * scale;
+        let scaled_y = y * scale;
+        let scaled_width = width * scale;
+        let scaled_height = height * scale;
+        let scaled_radii = [
+            corner_radii[0] * scale,
+            corner_radii[1] * scale,
+            corner_radii[2] * scale,
+            corner_radii[3] * scale,
+        ];
+
+        // Generate rounded rect geometry (we only need positions, color is ignored)
+        let (vertices, indices) = crate::geometry::rounded_rect(
+            scaled_x,
+            scaled_y,
+            scaled_width,
+            scaled_height,
+            0xFFFFFFFF, // Color doesn't matter for stencil
+            scaled_radii,
+        );
+
+        // Convert to NDC coordinates (stencil pipeline only uses position.xy)
+        let ndc_positions: Vec<[f32; 2]> = vertices.iter().map(|v| {
+            let ndc = self.screen_to_ndc(v.position[0], v.position[1]);
+            [ndc[0], ndc[1]]
+        }).collect();
+
+        // Create vertex buffer with just positions
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Stencil Vertex Buffer"),
+            contents: bytemuck::cast_slice(&ndc_positions),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Create index buffer
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Stencil Index Buffer"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // Set stencil reference to 1 - this is what gets written to the stencil buffer
+        render_pass.set_stencil_reference(1);
+
+        // Use stencil pipeline and draw
+        render_pass.set_pipeline(pipeline);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
 
         Ok(())
