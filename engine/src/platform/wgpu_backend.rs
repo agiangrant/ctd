@@ -17,6 +17,9 @@ use crate::text::atlas::MacOSGlyphRasterizer;
 #[cfg(target_os = "android")]
 use crate::text::atlas::AndroidGlyphRasterizer;
 
+#[cfg(target_os = "linux")]
+use crate::text::atlas::LinuxGlyphRasterizer;
+
 
 /// Surface configuration for wgpu
 pub struct SurfaceConfig {
@@ -112,6 +115,11 @@ pub struct WgpuBackend {
     #[cfg(target_os = "android")]
     rasterizer: AndroidGlyphRasterizer,
 
+    #[cfg(target_os = "linux")]
+    glyph_atlas: GlyphAtlas,
+    #[cfg(target_os = "linux")]
+    rasterizer: LinuxGlyphRasterizer,
+
     // Configuration
     width: u32,
     height: u32,
@@ -163,6 +171,10 @@ impl WgpuBackend {
             glyph_atlas: GlyphAtlas::new(2048, 2048),
             #[cfg(target_os = "android")]
             rasterizer: AndroidGlyphRasterizer::new(),
+            #[cfg(target_os = "linux")]
+            glyph_atlas: GlyphAtlas::new(2048, 2048),
+            #[cfg(target_os = "linux")]
+            rasterizer: LinuxGlyphRasterizer::new(),
             width: 0,
             height: 0,
             scale_factor: 1.0,
@@ -844,7 +856,7 @@ impl WgpuBackend {
 
     /// Upload atlas texture to GPU if dirty
     fn upload_atlas_if_needed(&mut self) -> Result<(), Box<dyn Error>> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         {
             if self.glyph_atlas.is_dirty() {
                 let queue = self.queue.as_ref().ok_or("Queue not initialized")?;
@@ -1390,7 +1402,7 @@ impl WgpuBackend {
     }
 
     /// Render text at the given position with multi-line support
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
     fn render_text(
         &mut self,
         render_pass: &mut wgpu::RenderPass,
@@ -1717,7 +1729,7 @@ impl WgpuBackend {
     }
 
     /// Layout text into lines with word wrapping
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
     fn layout_text_lines(
         &mut self,
         text: &str,
@@ -1878,7 +1890,7 @@ impl WgpuBackend {
     }
 
     /// Rasterize a text segment and return glyph info
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
     fn rasterize_text_segment(
         &mut self,
         text: &str,
@@ -1911,7 +1923,7 @@ impl WgpuBackend {
         Ok(glyphs)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
     fn render_text(
         &mut self,
         _render_pass: &mut wgpu::RenderPass,

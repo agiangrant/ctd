@@ -27,6 +27,12 @@ pub mod android;
 #[cfg(target_os = "android")]
 pub mod android_input;
 
+// Linux uses GStreamer for video decoding and V4L2 for camera capture
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+pub mod linux_input;
+
 use std::error::Error;
 use std::fmt;
 

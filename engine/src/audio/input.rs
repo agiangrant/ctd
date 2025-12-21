@@ -130,8 +130,11 @@ pub struct AudioInput {
     #[cfg(target_os = "android")]
     backend: super::android_input::AndroidAudioInput,
 
+    #[cfg(target_os = "linux")]
+    backend: super::linux_input::LinuxAudioInput,
+
     // Placeholder for unsupported platforms
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
     _phantom: std::marker::PhantomData<()>,
 }
 
@@ -143,40 +146,42 @@ impl AudioInput {
             backend: super::macos_input::MacOSAudioInput::new(),
             #[cfg(target_os = "android")]
             backend: super::android_input::AndroidAudioInput::new(),
-            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+            #[cfg(target_os = "linux")]
+            backend: super::linux_input::LinuxAudioInput::new(),
+            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Request microphone permission (shows system dialog if needed)
     pub fn request_permission(&mut self) -> Result<(), AudioError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.request_permission();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Check if permission was granted
     pub fn has_permission(&self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.has_permission();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         false
     }
 
     /// List available audio input devices
     pub fn list_devices(&self) -> Result<Vec<AudioInputDevice>, AudioError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.list_devices();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Open a specific device (or default if None)
     pub fn open(&mut self, device_id: Option<&str>, config: &AudioInputConfig) -> Result<(), AudioError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.open(device_id, config);
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         {
             let _ = (device_id, config);
             Err(AudioError::UnsupportedPlatform)
@@ -185,55 +190,55 @@ impl AudioInput {
 
     /// Start capturing audio
     pub fn start(&mut self) -> Result<(), AudioError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.start();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Stop capturing audio
     pub fn stop(&mut self) -> Result<(), AudioError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.stop();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         Err(AudioError::UnsupportedPlatform)
     }
 
     /// Close the device
     pub fn close(&mut self) {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         self.backend.close();
     }
 
     /// Get current state
     pub fn state(&self) -> AudioInputState {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.state();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         AudioInputState::Idle
     }
 
     /// Get audio info
     pub fn info(&self) -> Option<&AudioInfo> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.info();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         None
     }
 
     /// Set callback for audio samples
     pub fn set_sample_callback(&mut self, callback: Option<AudioSampleCallback>) {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         self.backend.set_sample_callback(callback);
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         let _ = callback;
     }
 
     /// Get current audio level (0.0 - 1.0)
     pub fn level(&self) -> f32 {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
         return self.backend.level();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
         0.0
     }
 }

@@ -15,6 +15,9 @@ use super::macos::MacOSAudioBackend;
 #[cfg(target_os = "android")]
 use super::android::AndroidAudioPlayer;
 
+#[cfg(target_os = "linux")]
+use super::linux::LinuxAudioBackend;
+
 /// Audio player that manages playback through platform backends
 pub struct AudioPlayer {
     /// Platform-specific audio backend
@@ -104,7 +107,12 @@ impl AudioPlayer {
         Ok(Box::new(AndroidAudioPlayer::new()))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+    #[cfg(target_os = "linux")]
+    fn create_backend() -> Result<Box<dyn AudioBackend>, AudioError> {
+        Ok(Box::new(LinuxAudioBackend::new()))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
     fn create_backend() -> Result<Box<dyn AudioBackend>, AudioError> {
         Err(AudioError::UnsupportedPlatform)
     }

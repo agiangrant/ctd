@@ -37,9 +37,8 @@ raw-window-handle = "0.6"  # For cross-platform window handle access
 # Image loading (PNG, JPEG, etc.)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
-# Windowing (for Rust-owned window mode)
-# Using vendored winit with iOS patches
-winit = { path = "vendor/winit" }
+# Windowing (for desktop platforms - iOS uses native UIKit, Android uses native activity)
+winit = "0.30"
 
 # macOS/iOS - Core Graphics and Core Text for font rasterization
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
@@ -95,6 +94,29 @@ log = "0.4"
 android_logger = "0.14"
 unicode-segmentation = "1.10"  # For proper grapheme cluster handling (emoji sequences)
 
+# Linux-specific dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+# Text rendering
+freetype-rs = "0.37"          # FreeType bindings for glyph rasterization
+fontconfig = "0.10"           # fontconfig bindings for system font discovery
+# Desktop integration
+arboard = "3"                 # Clipboard (X11 + Wayland)
+rfd = "0.15"                  # Native file dialogs
+tray-icon = { version = "0.19", default-features = false }  # System tray icons (no libxdo)
+notify-rust = "4"             # Desktop notifications
+zbus = { version = "4", default-features = false, features = ["tokio"] }  # D-Bus for XDG portals
+tokio = { version = "1", features = ["rt-multi-thread"] }  # Async runtime for zbus
+# Audio playback and capture
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }  # Audio playback
+cpal = "0.15"                 # Audio input/output
+ureq = "2"                    # HTTP client for URL loading
+# Video playback (GStreamer)
+gstreamer = "0.23"            # GStreamer bindings
+gstreamer-video = "0.23"      # Video support
+gstreamer-app = "0.23"        # App source/sink
+# Camera capture
+v4l = "0.14"                  # Video4Linux2 bindings
+
 # Web/WASM dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -133,6 +155,3 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
-# Patch winit's dependencies with vendored versions for iOS support
-[patch.crates-io]
-softbuffer = { path = "vendor/softbuffer" }

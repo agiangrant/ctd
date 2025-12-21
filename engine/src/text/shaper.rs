@@ -17,6 +17,12 @@ mod macos;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use macos::MacOSTextShaper;
 
+// Linux uses FreeType-based text shaping
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxTextShaper;
+
 /// A positioned glyph ready for rendering
 #[derive(Debug, Clone)]
 pub struct ShapedGlyph {
@@ -130,11 +136,14 @@ pub trait TextShaper {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type PlatformTextShaper = MacOSTextShaper;
 
-// Stub shaper for unsupported platforms
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "linux")]
+pub type PlatformTextShaper = LinuxTextShaper;
+
+// Stub shaper for unsupported platforms (Windows, Web, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 pub use stub::StubTextShaper as PlatformTextShaper;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 mod stub {
     use super::*;
     use crate::text::font_manager::Font;

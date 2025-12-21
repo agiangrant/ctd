@@ -25,6 +25,10 @@ pub mod android;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
+// Linux desktop integration (clipboard, dialogs, tray, notifications)
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 // macOS native backend - kept for reference but not used (winit works fine on macOS)
 // Uncomment to use direct AppKit instead of winit
 // #[cfg(target_os = "macos")]

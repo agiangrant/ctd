@@ -2277,10 +2277,22 @@ impl ApplicationHandler<UserEvent> for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
+                let (mut dx, mut dy) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => (x as f64 * 20.0, y as f64 * 20.0),
                     winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
                 };
+
+                // On Linux, winit gives us "natural" scroll deltas.
+                // Flip to traditional if the user has natural scrolling disabled.
+                #[cfg(target_os = "linux")]
+                {
+                    use crate::platform::linux::is_natural_scrolling;
+                    if !is_natural_scrolling() {
+                        dx = -dx;
+                        dy = -dy;
+                    }
+                }
+
                 let event = AppEvent {
                     event_type: AppEventType::MouseWheel,
                     data1: dx,
@@ -3723,9 +3735,11 @@ pub extern "C" fn centered_haptic_feedback(style: i32) {
 // System Preferences FFI
 // ============================================================================
 
-/// Check if natural scrolling is enabled on macOS
-/// Returns 1 if natural scrolling is enabled (default), 0 if disabled
-/// On non-macOS platforms, always returns 1 (natural scrolling for touch devices)
+/// Check if natural scrolling is enabled
+/// Returns 1 if natural scrolling is enabled, 0 if disabled
+/// - macOS: Checks NSUserDefaults for com.apple.swipescrolldirection
+/// - Linux: Checks GNOME gsettings and KDE kreadconfig5
+/// - iOS/Android: Always returns 1 (touch devices use natural scrolling)
 ///
 /// # Safety
 /// This function is safe to call from any thread
@@ -3753,10 +3767,22 @@ pub extern "C" fn centered_get_natural_scrolling() -> i32 {
         1
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(target_os = "linux")]
     {
-        // Default to natural scrolling on other platforms
-        // TODO: Check Windows/Linux scroll direction preferences if needed
+        // We handle scroll direction in the Rust event handler, so tell Go
+        // the deltas are already correct (return 1 = no additional flipping needed)
+        1
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        // Android uses natural scrolling (touch-based)
+        1
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
+    {
+        // Default to natural scrolling on other platforms (Windows, etc.)
         1
     }
 }
@@ -5221,6 +5247,129 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
     // Measure at logical font size - rendering scales everything proportionally
     crate::text::atlas::android::measure_text_width(text_str, &descriptor)
         .unwrap_or(0.0)
+}
+
+// Linux implementations for text measurement using FreeType
+#[cfg(target_os = "linux")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_to_cursor(
+    text: *const c_char,
+    char_index: u32,
+    font_name: *const c_char,
+    font_size: f32,
+) -> f32 {
+    if text.is_null() || font_name.is_null() {
+        return 0.0;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Get substring up to char_index
+    let substring: String = text_str.chars().take(char_index as usize).collect();
+
+    if substring.is_empty() {
+        return 0.0;
+    }
+
+    let font_name_str = match CStr::from_ptr(font_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return 0.0,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size just like rendering does
+    let scaled_font_size = font_size * scale_factor;
+
+    // Use LinuxGlyphRasterizer to measure the string
+    let mut rasterizer = crate::text::atlas::LinuxGlyphRasterizer::new();
+    let descriptor = FontDescriptor::system(font_name_str, 400, FontStyle::Normal, scaled_font_size);
+
+    // Measure the whole substring at once
+    let total_width = rasterizer.measure_string(&substring, &descriptor);
+
+    // Convert back to logical pixels
+    total_width / scale_factor
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_with_font(
+    text: *const c_char,
+    font_json: *const c_char,
+) -> f32 {
+    if text.is_null() || font_json.is_null() {
+        return 0.0;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    if text_str.is_empty() {
+        return 0.0;
+    }
+
+    let font_json_str = match CStr::from_ptr(font_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Parse the font descriptor from JSON
+    let descriptor: FontDescriptor = match serde_json::from_str(font_json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to parse font descriptor JSON: {}", e);
+            return 0.0;
+        }
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return 0.0,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size for physical pixels
+    let scaled_descriptor = FontDescriptor {
+        source: descriptor.source,
+        weight: descriptor.weight,
+        style: descriptor.style,
+        size: descriptor.size * scale_factor,
+    };
+
+    // Use the LinuxGlyphRasterizer's measure_string which handles bundled fonts
+    let mut rasterizer = crate::text::atlas::LinuxGlyphRasterizer::new();
+    let width = rasterizer.measure_string(text_str, &scaled_descriptor);
+
+    // Convert back to logical pixels
+    width / scale_factor
 }
 
 // ============================================================================

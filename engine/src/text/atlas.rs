@@ -24,6 +24,12 @@ pub mod android;
 #[cfg(target_os = "android")]
 pub use android::AndroidGlyphRasterizer;
 
+// Linux uses FreeType for glyph rasterization
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxGlyphRasterizer;
+
 /// Unique identifier for a glyph in the atlas
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
@@ -488,11 +494,14 @@ pub type PlatformGlyphRasterizer = MacOSGlyphRasterizer;
 #[cfg(target_os = "android")]
 pub type PlatformGlyphRasterizer = AndroidGlyphRasterizer;
 
-// Stub rasterizer for unsupported platforms (Windows, Linux, etc.)
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+#[cfg(target_os = "linux")]
+pub type PlatformGlyphRasterizer = LinuxGlyphRasterizer;
+
+// Stub rasterizer for unsupported platforms (Windows, Web, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
 pub use stub::StubGlyphRasterizer as PlatformGlyphRasterizer;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
 mod stub {
     use super::*;
     use crate::text::FontDescriptor;

@@ -24,11 +24,18 @@ mod macos;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use macos::MacOSFontManager as PlatformFontManager;
 
-// Stub font manager for unsupported platforms
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+// Linux uses FreeType and fontconfig
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::LinuxFontManager as PlatformFontManager;
+
+// Stub font manager for unsupported platforms (Windows, Web, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 pub use stub::StubFontManager as PlatformFontManager;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 mod stub {
     use super::*;
 
