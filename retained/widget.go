@@ -243,8 +243,9 @@ type Widget struct {
 	textAlign  string  // "left", "center", "right", "justify", "start", "end" (default "left")
 
 	// Cached text metrics for layout (measured via FFI, cached to avoid repeated calls)
-	textWidth      float32 // Measured text width in pixels (0 if not yet measured)
-	textWidthDirty bool    // True when text width needs remeasurement
+	textWidth       float32 // Measured text width in pixels (0 if not yet measured)
+	textHeight      float32 // Measured font height (ascent + descent) in pixels
+	textMetricsDirty bool   // True when text metrics need remeasurement
 
 	// Scroll state
 	scrollX, scrollY       float32
@@ -883,7 +884,7 @@ func (w *Widget) SetText(text string) *Widget {
 	changed := w.text != text
 	if changed {
 		w.text = text
-		w.textWidthDirty = true
+		w.textMetricsDirty = true
 		// Mark both text and layout dirty - text content affects widget sizing
 		// (especially for multi-line text with newlines)
 		w.markDirty(DirtyText | DirtyLayout)
@@ -915,7 +916,7 @@ func (w *Widget) SetFontSize(size float32) *Widget {
 	defer w.mu.Unlock()
 	if w.fontSize != size {
 		w.fontSize = size
-		w.textWidthDirty = true
+		w.textMetricsDirty = true
 		w.markDirty(DirtyText)
 	}
 	return w
@@ -960,7 +961,7 @@ func (w *Widget) SetFontName(name string) *Widget {
 	defer w.mu.Unlock()
 	if w.fontName != name {
 		w.fontName = name
-		w.textWidthDirty = true
+		w.textMetricsDirty = true
 		w.markDirty(DirtyText)
 	}
 	return w
@@ -981,7 +982,7 @@ func (w *Widget) SetFontFamily(family string) *Widget {
 	defer w.mu.Unlock()
 	if w.fontFamily != family {
 		w.fontFamily = family
-		w.textWidthDirty = true
+		w.textMetricsDirty = true
 		w.markDirty(DirtyText)
 	}
 	return w
@@ -996,6 +997,15 @@ func (w *Widget) TextWidth() float32 {
 	return w.textWidthLocked()
 }
 
+// TextHeight returns the cached font height (ascent + descent) in pixels, measuring if needed.
+// This represents the actual vertical space the font glyphs occupy, which may differ from fontSize.
+// The result is cached and only re-measured when text or font properties change.
+func (w *Widget) TextHeight() float32 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.textHeightLocked()
+}
+
 // textWidthLocked returns the cached text width, measuring if needed.
 // Must be called with w.mu held.
 func (w *Widget) textWidthLocked() float32 {
@@ -1003,18 +1013,31 @@ func (w *Widget) textWidthLocked() float32 {
 		return 0
 	}
 
-	if w.textWidthDirty || w.textWidth == 0 {
-		w.measureTextWidthLocked()
+	if w.textMetricsDirty || w.textWidth == 0 {
+		w.measureTextMetricsLocked()
 	}
 	return w.textWidth
 }
 
-// measureTextWidthLocked performs the actual text measurement.
+// textHeightLocked returns the cached font height, measuring if needed.
 // Must be called with w.mu held.
-func (w *Widget) measureTextWidthLocked() {
+func (w *Widget) textHeightLocked() float32 {
+	if w.fontSize == 0 {
+		return 0
+	}
+
+	if w.textMetricsDirty || w.textHeight == 0 {
+		w.measureTextMetricsLocked()
+	}
+	return w.textHeight
+}
+
+// measureTextMetricsLocked performs the actual text measurement for both width and height.
+// Must be called with w.mu held.
+func (w *Widget) measureTextMetricsLocked() {
 	// Use the extended measurement function that supports font families
-	w.textWidth = measureTextWidthExtFunc(w.text, w.fontName, w.fontFamily, w.fontSize)
-	w.textWidthDirty = false
+	w.textWidth, w.textHeight = measureTextMetricsExtFunc(w.text, w.fontName, w.fontFamily, w.fontSize)
+	w.textMetricsDirty = false
 }
 
 // measureTextWidthFunc is the function used to measure text width (legacy, system fonts only).
@@ -1024,6 +1047,11 @@ var measureTextWidthFunc = defaultMeasureTextWidth
 // measureTextWidthExtFunc is the extended measurement function that supports font families.
 // It resolves fontFamily through ThemeFonts() to get the actual font source.
 var measureTextWidthExtFunc = defaultMeasureTextWidthExt
+
+// measureTextMetricsExtFunc is the extended measurement function that returns both width and height.
+// It resolves fontFamily through ThemeFonts() to get the actual font source.
+// Returns (width, height) where height is the actual font height (ascent + descent).
+var measureTextMetricsExtFunc = defaultMeasureTextMetricsExt
 
 // defaultMeasureTextWidth uses the FFI to measure text width (legacy).
 func defaultMeasureTextWidth(text string, fontName string, fontSize float32) float32 {
@@ -1038,6 +1066,15 @@ func defaultMeasureTextWidthExt(text string, fontName string, fontFamily string,
 	return measureTextWidthFunc(text, fontName, fontSize)
 }
 
+// defaultMeasureTextMetricsExt measures text width and font height with font family support.
+// Returns (width, height) where height is the actual font height (ascent + descent).
+// Default implementation returns width from legacy function and fontSize as height fallback.
+func defaultMeasureTextMetricsExt(text string, fontName string, fontFamily string, fontSize float32) (float32, float32) {
+	width := measureTextWidthExtFunc(text, fontName, fontFamily, fontSize)
+	// Default: assume font height equals fontSize (will be overridden by FFI implementation)
+	return width, fontSize
+}
+
 // SetMeasureTextWidthFunc allows setting a custom text measurement function.
 // This is useful for testing or for transitioning to a shared memory approach.
 func SetMeasureTextWidthFunc(fn func(text string, fontName string, fontSize float32) float32) {
@@ -1048,6 +1085,12 @@ func SetMeasureTextWidthFunc(fn func(text string, fontName string, fontSize floa
 // that supports font families (bundled fonts, theme fonts).
 func SetMeasureTextWidthExtFunc(fn func(text string, fontName string, fontFamily string, fontSize float32) float32) {
 	measureTextWidthExtFunc = fn
+}
+
+// SetMeasureTextMetricsExtFunc allows setting the extended text metrics measurement function
+// that returns both width and height with font family support.
+func SetMeasureTextMetricsExtFunc(fn func(text string, fontName string, fontFamily string, fontSize float32) (float32, float32)) {
+	measureTextMetricsExtFunc = fn
 }
 
 // SetScroll sets the scroll offset.

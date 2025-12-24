@@ -1582,10 +1582,12 @@ func WrapTextWithFont(text string, maxWidth, fontSize float32, fontName string, 
 			}
 
 			// Check if we've exceeded width
+			// Use small tolerance to match Rust's rendering tolerance (1 logical pixel)
 			lineText := string(runes[lineStart : lineEnd+1])
 			lineWidth := measureText(lineText)
+			overflowTolerance := float32(1.0)
 
-			if lineWidth > maxWidth && lineEnd > lineStart {
+			if lineWidth > maxWidth+overflowTolerance && lineEnd > lineStart {
 				// Need to wrap
 				var breakPoint int
 				if lastWordEnd > lineStart {

@@ -116,6 +116,10 @@ func init() {
 
 	// Wire up the extended measurement function that supports font families
 	SetMeasureTextWidthExtFunc(measureTextWithFontFamily)
+
+	// Wire up the full metrics measurement function (width + height)
+	// This enables accurate layout for fonts with non-standard metrics
+	SetMeasureTextMetricsExtFunc(measureTextMetricsWithFontFamily)
 }
 
 // measureTextWithFontFamily measures text width, resolving fontFamily through theme fonts.
@@ -186,6 +190,70 @@ func measureSingleLineText(text string, fontName string, fontFamily string, font
 	width = ffi.MeasureTextWidth(text, fontName, fontSize)
 	globalTextCache.put(cacheKey, width)
 	return width
+}
+
+// measureTextMetricsWithFontFamily measures text and returns both width and height.
+// This resolves fontFamily through theme fonts and uses actual font metrics for height.
+// The height returned is the actual font height (ascent + descent), not fontSize.
+func measureTextMetricsWithFontFamily(text string, fontName string, fontFamily string, fontSize float32) (float32, float32) {
+	if fontSize == 0 {
+		fontSize = 16 // default
+	}
+
+	// For width, use the existing function which handles newlines correctly
+	width := measureTextWithFontFamily(text, fontName, fontFamily, fontSize)
+
+	// For height, we need to get actual font metrics
+	// We only need to measure once per font (not per text), so use empty string
+	height := measureFontHeight(fontName, fontFamily, fontSize)
+
+	return width, height
+}
+
+// measureFontHeight returns the actual font height (ascent + descent) for a given font.
+// This is cached since font metrics don't change based on text content.
+func measureFontHeight(fontName string, fontFamily string, fontSize float32) float32 {
+	// Build cache key for font height (no text needed)
+	cacheKey := fmt.Sprintf("height|%s|%s|%.1f", fontName, fontFamily, fontSize)
+
+	// Check cache first
+	if height, ok := globalTextCache.get(cacheKey); ok {
+		return height
+	}
+
+	var height float32
+
+	// If fontFamily is set, resolve it through theme fonts and use the full descriptor
+	if fontFamily != "" {
+		fonts := getThemeFonts()
+		if config, ok := fonts[fontFamily]; ok {
+			var font ffi.FontDescriptor
+			if config.IsBundled {
+				font = ffi.BundledFont(config.Value, fontSize)
+			} else {
+				font = ffi.SystemFont(config.Value, fontSize)
+			}
+			metrics := ffi.MeasureTextMetricsWithFont("", font)
+			height = metrics.Height
+			if height == 0 {
+				height = fontSize // fallback if measurement fails
+			}
+			globalTextCache.put(cacheKey, height)
+			return height
+		}
+	}
+
+	// Fall back to system font measurement
+	if fontName == "" {
+		fontName = "system"
+	}
+	metrics := ffi.MeasureText("", fontName, fontSize)
+	height = metrics.Height
+	if height == 0 {
+		height = fontSize // fallback if measurement fails
+	}
+	globalTextCache.put(cacheKey, height)
+	return height
 }
 
 // textAlignToFFI converts widget textAlign string to FFI TextAlign enum.

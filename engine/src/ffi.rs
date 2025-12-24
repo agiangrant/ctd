@@ -5555,6 +5555,138 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
     width / scale_factor
 }
 
+/// Measure text dimensions with a full font descriptor (supports bundled fonts)
+///
+/// This function returns full text metrics including height, ascent, and descent.
+/// It supports both system fonts and bundled fonts via the FontDescriptor.
+///
+/// # Arguments
+/// * `text` - The text to measure (null-terminated UTF-8)
+/// * `font_json` - JSON-encoded FontDescriptor (null-terminated UTF-8)
+///
+/// # Returns
+/// TextMeasurement with width, height, ascent, and descent in logical pixels.
+/// On error, returns all zeros.
+///
+/// # Safety
+/// - text must be a valid null-terminated UTF-8 string
+/// - font_json must be a valid null-terminated UTF-8 JSON string
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_metrics_with_font(
+    text: *const c_char,
+    font_json: *const c_char,
+) -> TextMeasurement {
+    let error_result = TextMeasurement {
+        width: 0.0,
+        height: 0.0,
+        ascent: 0.0,
+        descent: 0.0,
+    };
+
+    if text.is_null() || font_json.is_null() {
+        return error_result;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return error_result,
+    };
+
+    // Empty text still has font metrics (height based on font)
+    let font_json_str = match CStr::from_ptr(font_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return error_result,
+    };
+
+    // Parse the font descriptor from JSON
+    let descriptor: FontDescriptor = match serde_json::from_str(font_json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to parse font descriptor JSON: {}", e);
+            return error_result;
+        }
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return error_result,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size for physical pixels
+    let scaled_descriptor = FontDescriptor {
+        source: descriptor.source,
+        weight: descriptor.weight,
+        style: descriptor.style,
+        size: descriptor.size * scale_factor,
+    };
+
+    // Use font manager to get font metrics
+    let font_manager = get_font_manager();
+    let mut manager = match font_manager.lock() {
+        Ok(m) => m,
+        Err(_) => return error_result,
+    };
+
+    match manager.load_font(&scaled_descriptor) {
+        Ok(font) => {
+            let width = if text_str.is_empty() {
+                0.0
+            } else {
+                font.measure_text(text_str)
+            };
+            let ascent = font.ascent();
+            let descent = font.descent().abs();
+            let height = ascent + descent;
+
+            TextMeasurement {
+                width: width / scale_factor,
+                height: height / scale_factor,
+                ascent: ascent / scale_factor,
+                descent: descent / scale_factor,
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to load font for measurement: {}", e);
+            error_result
+        }
+    }
+}
+
+/// Pointer-based version of centered_measure_text_metrics_with_font for iOS compatibility.
+/// iOS with purego doesn't support returning structs directly, so we write to an output pointer.
+///
+/// # Safety
+/// - text must be a valid null-terminated UTF-8 string
+/// - font_json must be a valid null-terminated UTF-8 JSON string
+/// - out must be a valid pointer to a TextMeasurement struct
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_metrics_with_font_ptr(
+    text: *const c_char,
+    font_json: *const c_char,
+    out: *mut TextMeasurement,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+
+    let result = centered_measure_text_metrics_with_font(text, font_json);
+    *out = result;
+    0
+}
+
 // Android implementations for text measurement using JNI Canvas API
 #[cfg(target_os = "android")]
 #[cfg(not(target_arch = "wasm32"))]

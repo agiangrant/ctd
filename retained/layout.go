@@ -113,7 +113,13 @@ func calculateIntrinsicSize(w *Widget, availableWidth float32) (width, height fl
 			if lh == 0 {
 				lh = 1.4
 			}
-			singleLineHeight := fontSize * lh
+
+			// Use actual font height (ascent + descent) instead of fontSize
+			// This ensures proper layout for fonts with non-standard metrics
+			actualFontHeight := w.TextHeight()
+			if actualFontHeight == 0 {
+				actualFontHeight = fontSize // Fallback if not measured
+			}
 
 			// For Text widgets, calculate height based on wrapped lines
 			// when width is constrained by parent
@@ -124,6 +130,7 @@ func calculateIntrinsicSize(w *Widget, availableWidth float32) (width, height fl
 			// Count explicit newlines in the text - these create lines regardless of wrapping
 			explicitNewlines := strings.Count(text, "\n")
 
+			lineHeightPx := actualFontHeight * lh
 			if kind == KindText && height == 0 {
 				if contentW > 0 && textW > contentW {
 					// Text will wrap - estimate number of lines needed
@@ -133,19 +140,25 @@ func calculateIntrinsicSize(w *Widget, availableWidth float32) (width, height fl
 					if numLines < 1 {
 						numLines = 1
 					}
-					height = (fontSize * lh * float32(numLines)) + padding[0] + padding[2]
+					// Height formula matches Rust's rendering:
+					// Each line takes lineHeightPx (which includes spacing above and below)
+					// Total = numLines * lineHeightPx
+					textHeight := float32(numLines) * lineHeightPx
+					height = textHeight + padding[0] + padding[2]
 				} else if explicitNewlines > 0 {
 					// Text has explicit newlines but doesn't need word wrapping
 					// Each \n creates an additional line
 					numLines := explicitNewlines + 1
-					height = (fontSize * lh * float32(numLines)) + padding[0] + padding[2]
+					// Height formula: numLines * lineHeightPx
+					textHeight := float32(numLines) * lineHeightPx
+					height = textHeight + padding[0] + padding[2]
 				} else {
-					// Single line, no wrapping needed
-					height = singleLineHeight + padding[0] + padding[2]
+					// Single line - use lineHeightPx for consistent spacing
+					height = lineHeightPx + padding[0] + padding[2]
 				}
 			} else if height == 0 {
-				// Button or height already set
-				height = singleLineHeight + padding[0] + padding[2]
+				// Button or height already set - use lineHeightPx for consistency
+				height = lineHeightPx + padding[0] + padding[2]
 			}
 
 			// Use measured text width for proper layout
@@ -846,6 +859,12 @@ func computeWidgetLayout(w *Widget, constraints LayoutConstraints) {
 				lineHeight = 1.4 // Default line height multiplier when not configured
 			}
 
+			// Use actual font height instead of fontSize
+			actualFontHeight := w.textHeightLocked()
+			if actualFontHeight == 0 {
+				actualFontHeight = w.fontSize // Fallback
+			}
+
 			// Check if text needs wrapping
 			textW := w.textWidthLocked()
 			contentW := resolvedWidth - w.padding[1] - w.padding[3]
@@ -864,10 +883,10 @@ func computeWidgetLayout(w *Widget, constraints LayoutConstraints) {
 				if numLines < 1 {
 					numLines = 1
 				}
-				resolvedHeight = (w.fontSize * lineHeight * float32(numLines)) + w.padding[0] + w.padding[2]
+				resolvedHeight = (actualFontHeight * lineHeight * float32(numLines)) + w.padding[0] + w.padding[2]
 			} else {
 				// Single line
-				resolvedHeight = w.fontSize*lineHeight + w.padding[0] + w.padding[2]
+				resolvedHeight = actualFontHeight*lineHeight + w.padding[0] + w.padding[2]
 			}
 		}
 	}
@@ -877,7 +896,12 @@ func computeWidgetLayout(w *Widget, constraints LayoutConstraints) {
 		if lineHeight == 0 {
 			lineHeight = 1.4
 		}
-		resolvedHeight = w.fontSize*lineHeight + w.padding[0] + w.padding[2]
+		// Use actual font height for buttons too
+		actualFontHeight := w.textHeightLocked()
+		if actualFontHeight == 0 {
+			actualFontHeight = w.fontSize
+		}
+		resolvedHeight = actualFontHeight*lineHeight + w.padding[0] + w.padding[2]
 		if resolvedHeight < 32 {
 			resolvedHeight = 32
 		}
@@ -896,7 +920,12 @@ func computeWidgetLayout(w *Widget, constraints LayoutConstraints) {
 				if lineHeight == 0 {
 					lineHeight = 1.4
 				}
-				textHeight = w.fontSize * lineHeight
+				// Use actual font height
+				actualFontHeight := w.textHeightLocked()
+				if actualFontHeight == 0 {
+					actualFontHeight = w.fontSize
+				}
+				textHeight = actualFontHeight * lineHeight
 			}
 			if boxSize > textHeight {
 				resolvedHeight = boxSize
@@ -1414,7 +1443,13 @@ func layoutChildren(
 			if lh == 0 {
 				lh = 1.4 // Default line height multiplier
 			}
-			singleLineHeight := info.fontSize * lh
+
+			// Use actual font height instead of fontSize
+			actualFontHeight := info.widget.TextHeight()
+			if actualFontHeight == 0 {
+				actualFontHeight = info.fontSize // Fallback
+			}
+			singleLineHeight := actualFontHeight * lh
 
 			// Get text width for width calculation
 			textW := info.widget.TextWidth()
@@ -1468,7 +1503,12 @@ func layoutChildren(
 					if lh == 0 {
 						lh = 1.4
 					}
-					textHeight = info.fontSize * lh
+					// Use actual font height
+					actualFontHeight := info.widget.TextHeight()
+					if actualFontHeight == 0 {
+						actualFontHeight = info.fontSize
+					}
+					textHeight = actualFontHeight * lh
 				}
 				if boxSize > textHeight {
 					childHeight = boxSize
@@ -1994,14 +2034,14 @@ func batchMeasureTextWidths(root *Widget) {
 	collectDirty = func(w *Widget) {
 		w.mu.RLock()
 		text := w.text
-		textWidthDirty := w.textWidthDirty
+		textMetricsDirty := w.textMetricsDirty
 		fontSize := w.fontSize
 		children := acquireWidgetSlice(len(w.children))
 		copy(children, w.children)
 		w.mu.RUnlock()
 
 		// Check if this widget needs text measurement
-		if text != "" && fontSize > 0 && textWidthDirty {
+		if text != "" && fontSize > 0 && textMetricsDirty {
 			dirtyWidgets = append(dirtyWidgets, w)
 		}
 
@@ -2047,7 +2087,7 @@ func batchMeasureTextWidths(root *Widget) {
 	for i, w := range dirtyWidgets {
 		w.mu.Lock()
 		w.textWidth = widths[i]
-		w.textWidthDirty = false
+		w.textMetricsDirty = false
 		w.mu.Unlock()
 	}
 }

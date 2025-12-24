@@ -55,12 +55,14 @@ var (
 	fnGetTextureSize func(textureID uint32, widthOut uintptr, heightOut uintptr) int32
 
 	// Text measurement functions
-	fnMeasureText         func(text uintptr, fontName uintptr, fontSize float32) TextMeasurementC
-	fnMeasureTextPtr      func(text uintptr, fontName uintptr, fontSize float32, out uintptr) int32 // iOS-compatible version
-	fnMeasureTextWidth    func(text uintptr, fontName uintptr, fontSize float32) float32
-	fnMeasureTextToCursor func(text uintptr, charIndex uint32, fontName uintptr, fontSize float32) float32
-	fnMeasureTextWithFont func(text uintptr, fontJSON uintptr) float32
-	fnGetScaleFactor      func() float64
+	fnMeasureText            func(text uintptr, fontName uintptr, fontSize float32) TextMeasurementC
+	fnMeasureTextPtr         func(text uintptr, fontName uintptr, fontSize float32, out uintptr) int32 // iOS-compatible version
+	fnMeasureTextWidth       func(text uintptr, fontName uintptr, fontSize float32) float32
+	fnMeasureTextToCursor    func(text uintptr, charIndex uint32, fontName uintptr, fontSize float32) float32
+	fnMeasureTextWithFont    func(text uintptr, fontJSON uintptr) float32
+	fnMeasureTextMetricsWithFont    func(text uintptr, fontJSON uintptr) TextMeasurementC
+	fnMeasureTextMetricsWithFontPtr func(text uintptr, fontJSON uintptr, out uintptr) int32 // iOS-compatible version
+	fnGetScaleFactor         func() float64
 
 	// Safe area insets (iOS/Android)
 	fnGetSafeAreaInsetsPtr func(out uintptr) int32
@@ -393,6 +395,11 @@ func registerTextFunctions() {
 	purego.RegisterLibFunc(&fnMeasureTextWidth, libHandle, "centered_measure_text_width")
 	purego.RegisterLibFunc(&fnMeasureTextToCursor, libHandle, "centered_measure_text_to_cursor")
 	purego.RegisterLibFunc(&fnMeasureTextWithFont, libHandle, "centered_measure_text_with_font")
+	// Register metrics-with-font function (returns TextMeasurement struct)
+	if runtime.GOOS != "ios" {
+		purego.RegisterLibFunc(&fnMeasureTextMetricsWithFont, libHandle, "centered_measure_text_metrics_with_font")
+	}
+	purego.RegisterLibFunc(&fnMeasureTextMetricsWithFontPtr, libHandle, "centered_measure_text_metrics_with_font_ptr")
 	purego.RegisterLibFunc(&fnGetScaleFactor, libHandle, "centered_get_scale_factor")
 	// Safe area insets (iOS/Android) - use pointer version for iOS compatibility
 	purego.RegisterLibFunc(&fnGetSafeAreaInsetsPtr, libHandle, "centered_get_safe_area_insets_ptr")
@@ -2006,40 +2013,22 @@ func MeasureText(text string, fontName string, fontSize float32) TextMeasurement
 	textBytes := append([]byte(text), 0)
 	fontBytes := append([]byte(fontName), 0)
 
-	// On iOS, use the pointer-based version since purego doesn't support struct returns
-	if runtime.GOOS == "ios" {
-		var resultC TextMeasurementC
-		fnMeasureTextPtr(
-			uintptr(unsafe.Pointer(&textBytes[0])),
-			uintptr(unsafe.Pointer(&fontBytes[0])),
-			fontSize,
-			uintptr(unsafe.Pointer(&resultC)),
-		)
-		runtime.KeepAlive(textBytes)
-		runtime.KeepAlive(fontBytes)
-		return TextMeasurement{
-			Width:   resultC.Width,
-			Height:  resultC.Height,
-			Ascent:  resultC.Ascent,
-			Descent: resultC.Descent,
-		}
-	}
-
-	// On darwin (macOS), use the direct struct return version
-	result := fnMeasureText(
+	// Use pointer-based version on all platforms to avoid struct return issues
+	// purego's struct return handling can have issues on arm64 macOS
+	var resultC TextMeasurementC
+	fnMeasureTextPtr(
 		uintptr(unsafe.Pointer(&textBytes[0])),
 		uintptr(unsafe.Pointer(&fontBytes[0])),
 		fontSize,
+		uintptr(unsafe.Pointer(&resultC)),
 	)
-
 	runtime.KeepAlive(textBytes)
 	runtime.KeepAlive(fontBytes)
-
 	return TextMeasurement{
-		Width:   result.Width,
-		Height:  result.Height,
-		Ascent:  result.Ascent,
-		Descent: result.Descent,
+		Width:   resultC.Width,
+		Height:  resultC.Height,
+		Ascent:  resultC.Ascent,
+		Descent: resultC.Descent,
 	}
 }
 
@@ -2175,6 +2164,58 @@ func MeasureTextWithFont(text string, font FontDescriptor) float32 {
 	runtime.KeepAlive(fontJSONBytes)
 
 	return result
+}
+
+// MeasureTextMetricsWithFont measures text and returns full metrics (width, height, ascent, descent).
+// This supports both system fonts and bundled fonts via the FontDescriptor.
+// Note: text can be empty - in that case width will be 0 but height will reflect font metrics.
+func MeasureTextMetricsWithFont(text string, font FontDescriptor) TextMeasurement {
+	if !initialized {
+		if err := initLibrary(); err != nil {
+			return TextMeasurement{}
+		}
+	}
+
+	textBytes := append([]byte(text), 0)
+	fontJSON, err := json.Marshal(font)
+	if err != nil {
+		return TextMeasurement{}
+	}
+	fontJSONBytes := append(fontJSON, 0)
+
+	// On iOS, use the pointer-based version since purego doesn't support struct returns
+	if runtime.GOOS == "ios" {
+		var resultC TextMeasurementC
+		fnMeasureTextMetricsWithFontPtr(
+			uintptr(unsafe.Pointer(&textBytes[0])),
+			uintptr(unsafe.Pointer(&fontJSONBytes[0])),
+			uintptr(unsafe.Pointer(&resultC)),
+		)
+		runtime.KeepAlive(textBytes)
+		runtime.KeepAlive(fontJSONBytes)
+		return TextMeasurement{
+			Width:   resultC.Width,
+			Height:  resultC.Height,
+			Ascent:  resultC.Ascent,
+			Descent: resultC.Descent,
+		}
+	}
+
+	// On macOS, use the direct struct return version
+	result := fnMeasureTextMetricsWithFont(
+		uintptr(unsafe.Pointer(&textBytes[0])),
+		uintptr(unsafe.Pointer(&fontJSONBytes[0])),
+	)
+
+	runtime.KeepAlive(textBytes)
+	runtime.KeepAlive(fontJSONBytes)
+
+	return TextMeasurement{
+		Width:   result.Width,
+		Height:  result.Height,
+		Ascent:  result.Ascent,
+		Descent: result.Descent,
+	}
 }
 
 func GetScaleFactor() float64 {

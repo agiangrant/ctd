@@ -373,6 +373,27 @@ impl MacOSGlyphRasterizer {
 
         bounds.width as f32
     }
+
+    /// Get font metrics (ascent, descent) for a given font descriptor.
+    /// Returns (ascent, descent) in pixels. Both values are positive.
+    /// Height = ascent + descent.
+    pub fn get_font_metrics(&mut self, font: &FontDescriptor) -> (f32, f32) {
+        let ct_font = match self.create_font(font) {
+            Some(f) => f,
+            None => {
+                // Fallback: assume standard ratio of 0.8/0.2 of font size
+                let ascent = font.size * 0.8;
+                let descent = font.size * 0.2;
+                return (ascent, descent);
+            }
+        };
+
+        // Get font metrics from CTFont
+        let ascent = ct_font.ascent() as f32;
+        let descent = ct_font.descent().abs() as f32; // descent is typically negative, make positive
+
+        (ascent, descent)
+    }
 }
 
 impl GlyphRasterizer for MacOSGlyphRasterizer {

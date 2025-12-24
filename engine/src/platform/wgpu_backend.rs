@@ -1790,12 +1790,6 @@ impl WgpuBackend {
 
         // Scale layout parameters
         let scaled_max_width = layout.max_width.map(|w| w * scale);
-        let line_height_px = font.size * layout.line_height * scale;
-
-        // Calculate letter and word spacing (em units -> pixels)
-        // letter_spacing applies to every character, word_spacing applies additionally to spaces
-        let letter_spacing_px = layout.letter_spacing * font_size;
-        let word_spacing_px = layout.word_spacing * font_size;
 
         // Create a scaled font descriptor for rasterization
         let scaled_font = FontDescriptor {
@@ -1804,6 +1798,19 @@ impl WgpuBackend {
             style: font.style,
             size: font_size,
         };
+
+        // Get actual font metrics for accurate line height calculations
+        // This ensures fonts with non-standard metrics render correctly
+        let (ascent, descent) = self.rasterizer.get_font_metrics(&scaled_font);
+        let actual_font_height = ascent + descent;
+
+        // Calculate line height based on actual font metrics, not font_size
+        let line_height_px = actual_font_height * layout.line_height;
+
+        // Calculate letter and word spacing (em units -> pixels)
+        // letter_spacing applies to every character, word_spacing applies additionally to spaces
+        let letter_spacing_px = layout.letter_spacing * font_size;
+        let word_spacing_px = layout.word_spacing * font_size;
 
         // Pre-compute font ID for glyph cache lookups
         use std::collections::hash_map::DefaultHasher;
@@ -1815,17 +1822,17 @@ impl WgpuBackend {
         // Break text into lines based on layout config
         let all_lines = self.layout_text_lines(
             text, &scaled_font, font_id, font_size, scaled_max_width,
-            letter_spacing_px, word_spacing_px, layout
+            letter_spacing_px, word_spacing_px, layout, scale
         )?;
 
         // Calculate max lines based on max_lines setting and max_height
         let max_lines_from_setting = layout.max_lines.unwrap_or(usize::MAX);
         let max_lines_from_height = if let Some(max_h) = layout.max_height {
             let scaled_max_h = max_h * scale;
-            // First line takes font_size (for baseline + descender), subsequent lines take line_height_px
-            // So: font_size + (n-1) * line_height_px <= max_height
-            // Solving for n: n <= 1 + (max_height - font_size) / line_height_px
-            let first_line_height = font_size;
+            // First line takes actual_font_height, subsequent lines take line_height_px
+            // So: actual_font_height + (n-1) * line_height_px <= max_height
+            // Solving for n: n <= 1 + (max_height - actual_font_height) / line_height_px
+            let first_line_height = actual_font_height;
             let result = if scaled_max_h < first_line_height {
                 1 // At minimum show 1 line
             } else {
@@ -1905,20 +1912,14 @@ impl WgpuBackend {
         for (line_index, line) in lines.iter().enumerate() {
             // Calculate baseline Y for this line
             // The Y coordinate from layout is the TOP of the text box
-            // The text box height is fontSize * lineHeight (e.g., 14 * 1.4 = 19.6)
+            // The text box height is actualFontHeight * lineHeight
             // We need to position the baseline such that text is vertically centered
             //
-            // For typical fonts: ascent ~= 0.8 * fontSize, descent ~= 0.2 * fontSize
-            // Total glyph height = fontSize (ascent + descent)
-            // Extra space from lineHeight = fontSize * (lineHeight - 1)
-            // Half of extra space goes above: fontSize * (lineHeight - 1) / 2
-            // Baseline from top = extra_top + ascent = fontSize * (lineHeight - 1) / 2 + fontSize * 0.8
-            //                   = fontSize * ((lineHeight - 1) / 2 + 0.8)
-            //                   = fontSize * (lineHeight / 2 - 0.5 + 0.8)
-            //                   = fontSize * (lineHeight / 2 + 0.3)
-            // For lineHeight 1.4: fontSize * (0.7 + 0.3) = fontSize * 1.0
-            // For lineHeight 1.5: fontSize * (0.75 + 0.3) = fontSize * 1.05
-            let baseline_offset = font_size * (layout.line_height / 2.0 + 0.3);
+            // Extra space from lineHeight = actualFontHeight * (lineHeight - 1)
+            // Half of extra space goes above: actualFontHeight * (lineHeight - 1) / 2
+            // Baseline from top = extra_top + ascent
+            let extra_space = line_height_px - actual_font_height;
+            let baseline_offset = (extra_space / 2.0) + ascent;
             let line_baseline_y = scaled_y + baseline_offset + (line_index as f32 * line_height_px);
 
             // Calculate X offset for alignment and justify spacing
@@ -2099,9 +2100,10 @@ impl WgpuBackend {
         font_id: u64,
         font_size: f32,
         max_width: Option<f32>,
-        letter_spacing: f32,
-        word_spacing: f32,
+        _letter_spacing: f32,
+        _word_spacing: f32,
         layout: &TextLayoutConfig,
+        scale: f32,
     ) -> Result<Vec<TextLine>, Box<dyn Error>> {
         let mut lines = Vec::new();
 
@@ -2123,81 +2125,75 @@ impl WgpuBackend {
                 continue;
             }
 
-            // Get words/tokens for this paragraph
-            let words = self.tokenize_text(paragraph, preserve_whitespace);
-
             if !should_wrap || max_width.is_none() {
                 // No wrapping - render entire paragraph as one line
                 let glyphs = self.rasterize_text_segment(paragraph, scaled_font, font_id, font_size)?;
-                let width = Self::calculate_glyphs_width(&glyphs, letter_spacing, word_spacing);
+                let width = self.rasterizer.measure_string(paragraph, scaled_font);
                 lines.push(TextLine { glyphs, width });
             } else {
-                // Word wrap
+                // Character-by-character wrapping to match Go's algorithm exactly
+                // This ensures wrap decisions are identical between Go layout and Rust rendering
                 let max_w = max_width.unwrap();
-                let mut current_line_glyphs = Vec::new();
-                let mut current_line_width = 0.0f32;
+                // Go uses 1.0 logical pixel tolerance, so we need scale * 1.0 physical pixels
+                let overflow_tolerance = scale;
 
-                for word in words {
-                    // Measure the word
-                    let word_glyphs = self.rasterize_text_segment(&word, scaled_font, font_id, font_size)?;
-                    let word_width = Self::calculate_glyphs_width(&word_glyphs, letter_spacing, word_spacing);
+                let chars: Vec<char> = paragraph.chars().collect();
+                let mut line_start = 0;
+                let mut last_word_end = 0; // Position after last space (word boundary)
+                let mut i = 0;
 
-                    // Check if word fits on current line
-                    // Small tolerance for floating point rounding only
-                    let overflow_tolerance = 1.0;
-                    if current_line_glyphs.is_empty() {
-                        // First word on line - always add it (even if too long)
-                        current_line_glyphs.extend(word_glyphs);
-                        current_line_width = word_width;
-                    } else if current_line_width + word_width <= max_w + overflow_tolerance {
-                        // Word fits (with small tolerance) - add it
-                        current_line_glyphs.extend(word_glyphs);
-                        current_line_width += word_width;
-                    } else {
-                        // Word doesn't fit - start new line
+                while i < chars.len() {
+                    let ch = chars[i];
+
+                    // Track word boundaries
+                    if ch.is_whitespace() {
+                        last_word_end = i + 1;
+                    }
+
+                    // Measure text from line_start to i+1 (inclusive of current char)
+                    let line_text: String = chars[line_start..=i].iter().collect();
+                    let line_width = self.rasterizer.measure_string(&line_text, scaled_font);
+
+                    if line_width > max_w + overflow_tolerance && i > line_start {
+                        // Need to wrap - find break point
+                        let break_point = if last_word_end > line_start {
+                            // Break at last word boundary
+                            last_word_end
+                        } else {
+                            // No word boundary found, break at current character
+                            i
+                        };
+
+                        // Create line from line_start to break_point
+                        let final_line_text: String = chars[line_start..break_point].iter().collect();
+                        let final_line_width = self.rasterizer.measure_string(&final_line_text, scaled_font);
+                        let line_glyphs = self.rasterize_text_segment(&final_line_text, scaled_font, font_id, font_size)?;
                         lines.push(TextLine {
-                            glyphs: std::mem::take(&mut current_line_glyphs),
-                            width: current_line_width,
+                            glyphs: line_glyphs,
+                            width: final_line_width,
                         });
 
-                        // Handle WordBreak::BreakWord for very long words
-                        if layout.word_break == WordBreak::BreakWord && word_width > max_w {
-                            // Break the word character by character
-                            let mut char_glyphs = Vec::new();
-                            let mut char_width = 0.0f32;
-
-                            for glyph in word_glyphs {
-                                let glyph_advance = glyph.entry.advance + letter_spacing
-                                    + if glyph.character == ' ' { word_spacing } else { 0.0 };
-                                if char_width + glyph_advance > max_w && !char_glyphs.is_empty() {
-                                    lines.push(TextLine {
-                                        glyphs: std::mem::take(&mut char_glyphs),
-                                        width: char_width,
-                                    });
-                                    char_width = 0.0;
-                                }
-                                char_width += glyph_advance;
-                                char_glyphs.push(glyph);
-                            }
-
-                            current_line_glyphs = char_glyphs;
-                            current_line_width = char_width;
-                        } else {
-                            // Start new line with this word (skip leading space if any)
-                            let trimmed_glyphs: Vec<_> = word_glyphs.into_iter()
-                                .skip_while(|g| g.character == ' ')
-                                .collect();
-                            current_line_width = Self::calculate_glyphs_width(&trimmed_glyphs, letter_spacing, word_spacing);
-                            current_line_glyphs = trimmed_glyphs;
+                        // Skip whitespace at start of next line (matching Go behavior)
+                        line_start = break_point;
+                        while line_start < chars.len() && chars[line_start] == ' ' {
+                            line_start += 1;
                         }
+                        i = line_start;
+                        last_word_end = line_start;
+                        continue;
                     }
+
+                    i += 1;
                 }
 
-                // Don't forget the last line
-                if !current_line_glyphs.is_empty() {
+                // Add remaining text as final line
+                if line_start < chars.len() {
+                    let final_line_text: String = chars[line_start..].iter().collect();
+                    let final_line_width = self.rasterizer.measure_string(&final_line_text, scaled_font);
+                    let line_glyphs = self.rasterize_text_segment(&final_line_text, scaled_font, font_id, font_size)?;
                     lines.push(TextLine {
-                        glyphs: current_line_glyphs,
-                        width: current_line_width,
+                        glyphs: line_glyphs,
+                        width: final_line_width,
                     });
                 }
             }
