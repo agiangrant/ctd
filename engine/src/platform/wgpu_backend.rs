@@ -20,6 +20,9 @@ use crate::text::atlas::AndroidGlyphRasterizer;
 #[cfg(target_os = "linux")]
 use crate::text::atlas::LinuxGlyphRasterizer;
 
+#[cfg(target_os = "windows")]
+use crate::text::atlas::WindowsGlyphRasterizer;
+
 
 /// Surface configuration for wgpu
 pub struct SurfaceConfig {
@@ -144,6 +147,11 @@ pub struct WgpuBackend {
     #[cfg(target_os = "linux")]
     rasterizer: LinuxGlyphRasterizer,
 
+    #[cfg(target_os = "windows")]
+    glyph_atlas: GlyphAtlas,
+    #[cfg(target_os = "windows")]
+    rasterizer: WindowsGlyphRasterizer,
+
     // Configuration
     width: u32,
     height: u32,
@@ -199,6 +207,10 @@ impl WgpuBackend {
             glyph_atlas: GlyphAtlas::new(2048, 2048),
             #[cfg(target_os = "linux")]
             rasterizer: LinuxGlyphRasterizer::new(),
+            #[cfg(target_os = "windows")]
+            glyph_atlas: GlyphAtlas::new(2048, 2048),
+            #[cfg(target_os = "windows")]
+            rasterizer: WindowsGlyphRasterizer::new(),
             width: 0,
             height: 0,
             scale_factor: 1.0,
@@ -218,6 +230,18 @@ impl WgpuBackend {
     /// Get the current scale factor (for HiDPI displays)
     pub fn scale_factor(&self) -> f64 {
         self.scale_factor
+    }
+
+    /// Measure the width of a string using the rasterizer
+    #[cfg(target_os = "windows")]
+    pub fn measure_string(&mut self, text: &str, font: &crate::text::FontDescriptor) -> f32 {
+        self.rasterizer.measure_string(text, font)
+    }
+
+    /// Get font metrics (ascent, descent) for a given font
+    #[cfg(target_os = "windows")]
+    pub fn get_font_metrics(&mut self, font: &crate::text::FontDescriptor) -> (f32, f32) {
+        self.rasterizer.get_font_metrics(font)
     }
 
     /// Initialize the backend with a window (creates surface internally)
@@ -930,9 +954,58 @@ impl WgpuBackend {
         self.image_textures.remove(&texture_id);
     }
 
+    /// Update an existing texture with new image data (for video/camera frames)
+    /// This avoids the overhead of creating new textures for each frame.
+    /// If the dimensions don't match, creates a new texture.
+    pub fn update_texture(&mut self, texture_id: u32, image: &LoadedImage) -> Result<u32, Box<dyn Error>> {
+        let queue = self.queue.as_ref().ok_or("Queue not initialized")?;
+
+        // Check if we can update in-place (same dimensions)
+        if let Some(existing) = self.image_textures.get(&texture_id) {
+            if existing.width == image.width && existing.height == image.height {
+                // Update existing texture in-place
+                queue.write_texture(
+                    wgpu::ImageCopyTexture {
+                        texture: &existing.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &image.data,
+                    wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(image.width * 4),
+                        rows_per_image: Some(image.height),
+                    },
+                    wgpu::Extent3d {
+                        width: image.width,
+                        height: image.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                return Ok(texture_id);
+            }
+        }
+
+        // Dimensions changed or texture doesn't exist - create new one
+        // (remove old one first if it exists)
+        self.image_textures.remove(&texture_id);
+        self.load_image(image)
+    }
+
     /// Get texture dimensions for a loaded image
     pub fn get_texture_size(&self, texture_id: u32) -> Option<(u32, u32)> {
         self.image_textures.get(&texture_id).map(|tex| (tex.width, tex.height))
+    }
+
+    /// Get the current window width in pixels
+    pub fn get_width(&self) -> u32 {
+        self.width
+    }
+
+    /// Get the current window height in pixels
+    pub fn get_height(&self) -> u32 {
+        self.height
     }
 
     /// Create a video texture that can be updated each frame
@@ -1096,7 +1169,7 @@ impl WgpuBackend {
 
     /// Upload atlas texture to GPU if dirty
     fn upload_atlas_if_needed(&mut self) -> Result<(), Box<dyn Error>> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         {
             if self.glyph_atlas.is_dirty() {
                 let queue = self.queue.as_ref().ok_or("Queue not initialized")?;
@@ -1764,7 +1837,7 @@ impl WgpuBackend {
     }
 
     /// Render text at the given position with multi-line support
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
     fn render_text(
         &mut self,
         render_pass: &mut wgpu::RenderPass,
@@ -2092,7 +2165,7 @@ impl WgpuBackend {
     }
 
     /// Layout text into lines with word wrapping
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
     fn layout_text_lines(
         &mut self,
         text: &str,
@@ -2248,7 +2321,7 @@ impl WgpuBackend {
     }
 
     /// Rasterize a text segment and return glyph info
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
     fn rasterize_text_segment(
         &mut self,
         text: &str,
@@ -2281,7 +2354,7 @@ impl WgpuBackend {
         Ok(glyphs)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
     fn render_text(
         &mut self,
         _render_pass: &mut wgpu::RenderPass,
@@ -2292,7 +2365,7 @@ impl WgpuBackend {
         _color: u32,
         _layout: &TextLayoutConfig,
     ) -> Result<(), Box<dyn Error>> {
-        // TODO: Implement for other platforms
+        // TODO: Implement for other platforms (e.g., web)
         Ok(())
     }
 

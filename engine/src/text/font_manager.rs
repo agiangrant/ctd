@@ -31,11 +31,18 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxFontManager as PlatformFontManager;
 
-// Stub font manager for unsupported platforms (Windows, Web, etc.)
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
+// Windows uses DirectWrite
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(target_os = "windows")]
+pub use windows::WindowsFontManager as PlatformFontManager;
+
+// Stub font manager for unsupported platforms (Web, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
 pub use stub::StubFontManager as PlatformFontManager;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
 mod stub {
     use super::*;
 

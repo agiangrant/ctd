@@ -118,6 +118,51 @@ gstreamer-app = "0.23"        # App source/sink
 # Camera capture
 v4l = "0.14"                  # Video4Linux2 bindings
 
+# Windows-specific dependencies
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    # Core
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_Memory",
+    "Win32_System_DataExchange",
+
+    # Text rendering (DirectWrite)
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Dxgi_Common",
+
+    # Audio (WASAPI)
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Devices_Properties",
+    "Win32_UI_Shell_PropertiesSystem",
+
+    # Video (Media Foundation)
+    "Win32_Media_MediaFoundation",
+
+    # System tray
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+
+    # Window styling (DWM)
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls",
+
+    # Dark mode detection
+    "Win32_System_Registry",
+
+    # Networking (for URL downloads)
+    "Win32_Networking_WinHttp",
+]}
+
 # Web/WASM dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

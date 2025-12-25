@@ -230,7 +230,7 @@ func buildDeviceText(ref **retained.Widget) *retained.Widget {
 
 // buildCameraPreview creates a Video widget for displaying camera frames
 func buildCameraPreview(ref **retained.Widget) *retained.Widget {
-	w := retained.VideoStream(640, 480, "w-full h-64 rounded-lg bg-gray-700")
+	w := retained.VideoStream(640, 480, "w-full h-64 rounded-lg bg-gray-700 object-cover")
 	*ref = w
 	return w
 }

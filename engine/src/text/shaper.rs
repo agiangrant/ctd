@@ -23,6 +23,12 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxTextShaper;
 
+// Windows uses DirectWrite text shaping
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsTextShaper;
+
 /// A positioned glyph ready for rendering
 #[derive(Debug, Clone)]
 pub struct ShapedGlyph {
@@ -139,11 +145,14 @@ pub type PlatformTextShaper = MacOSTextShaper;
 #[cfg(target_os = "linux")]
 pub type PlatformTextShaper = LinuxTextShaper;
 
-// Stub shaper for unsupported platforms (Windows, Web, etc.)
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+pub type PlatformTextShaper = WindowsTextShaper;
+
+// Stub shaper for unsupported platforms (Web, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
 pub use stub::StubTextShaper as PlatformTextShaper;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
 mod stub {
     use super::*;
     use crate::text::font_manager::Font;

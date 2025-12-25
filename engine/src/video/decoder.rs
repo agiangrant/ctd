@@ -49,12 +49,27 @@ pub fn create_decoder_from_file(path: &str) -> Result<Box<dyn VideoDecoder>, Vid
     Ok(Box::new(decoder))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+/// Create a decoder for Windows
+#[cfg(target_os = "windows")]
+pub fn create_decoder_from_url(url: &str) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    use super::windows::WindowsVideoDecoder;
+    let decoder = WindowsVideoDecoder::from_url(url)?;
+    Ok(Box::new(decoder))
+}
+
+#[cfg(target_os = "windows")]
+pub fn create_decoder_from_file(path: &str) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    use super::windows::WindowsVideoDecoder;
+    let decoder = WindowsVideoDecoder::from_file(path)?;
+    Ok(Box::new(decoder))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
 pub fn create_decoder_from_url(_url: &str) -> Result<Box<dyn VideoDecoder>, VideoError> {
     Err(VideoError::UnsupportedPlatform)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
 pub fn create_decoder_from_file(_path: &str) -> Result<Box<dyn VideoDecoder>, VideoError> {
     Err(VideoError::UnsupportedPlatform)
 }

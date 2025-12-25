@@ -313,15 +313,7 @@ func initLibrary() error {
 		libPath := getLibraryPath()
 		log.Printf("ffi: attempting to load library from: %s", libPath)
 
-		var flags int
-		switch runtime.GOOS {
-		case "darwin", "ios":
-			flags = 0x1 // RTLD_LAZY
-		default:
-			flags = 0x1 // RTLD_LAZY
-		}
-
-		libHandle, libErr = purego.Dlopen(libPath, flags)
+		libHandle, libErr = openLibrary(libPath)
 		if libErr != nil {
 			libErr = fmt.Errorf("failed to load centered engine library from %s: %w", libPath, libErr)
 			return
@@ -396,7 +388,8 @@ func registerTextFunctions() {
 	purego.RegisterLibFunc(&fnMeasureTextToCursor, libHandle, "centered_measure_text_to_cursor")
 	purego.RegisterLibFunc(&fnMeasureTextWithFont, libHandle, "centered_measure_text_with_font")
 	// Register metrics-with-font function (returns TextMeasurement struct)
-	if runtime.GOOS != "ios" {
+	// Only macOS supports direct struct returns in purego
+	if runtime.GOOS == "darwin" {
 		purego.RegisterLibFunc(&fnMeasureTextMetricsWithFont, libHandle, "centered_measure_text_metrics_with_font")
 	}
 	purego.RegisterLibFunc(&fnMeasureTextMetricsWithFontPtr, libHandle, "centered_measure_text_metrics_with_font_ptr")
@@ -897,17 +890,18 @@ var (
 )
 
 // appCallback is the callback function called from Rust
-func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
+// Returns uintptr to satisfy Windows callback requirements (must return one uintptr-sized value)
+func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) uintptr {
 	globalMutex.Lock()
 	handler := globalHandler
 	globalMutex.Unlock()
 
 	if handler == nil {
-		return
+		return 0
 	}
 
 	if eventPtr == 0 {
-		return
+		return 0
 	}
 
 	// Read event from memory
@@ -972,6 +966,8 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) {
 			runtime.KeepAlive(b)
 		}
 	}
+
+	return 0
 }
 
 // iosReadyCallback is called by Rust when the iOS app is ready (after didFinishLaunching).
@@ -2183,38 +2179,39 @@ func MeasureTextMetricsWithFont(text string, font FontDescriptor) TextMeasuremen
 	}
 	fontJSONBytes := append(fontJSON, 0)
 
-	// On iOS, use the pointer-based version since purego doesn't support struct returns
-	if runtime.GOOS == "ios" {
-		var resultC TextMeasurementC
-		fnMeasureTextMetricsWithFontPtr(
+	// On macOS, use the direct struct return version (only platform that supports it)
+	if runtime.GOOS == "darwin" {
+		result := fnMeasureTextMetricsWithFont(
 			uintptr(unsafe.Pointer(&textBytes[0])),
 			uintptr(unsafe.Pointer(&fontJSONBytes[0])),
-			uintptr(unsafe.Pointer(&resultC)),
 		)
+
 		runtime.KeepAlive(textBytes)
 		runtime.KeepAlive(fontJSONBytes)
+
 		return TextMeasurement{
-			Width:   resultC.Width,
-			Height:  resultC.Height,
-			Ascent:  resultC.Ascent,
-			Descent: resultC.Descent,
+			Width:   result.Width,
+			Height:  result.Height,
+			Ascent:  result.Ascent,
+			Descent: result.Descent,
 		}
 	}
 
-	// On macOS, use the direct struct return version
-	result := fnMeasureTextMetricsWithFont(
+	// On other platforms (Windows, Linux, iOS, Android), use the pointer-based version
+	// since purego doesn't support struct returns on these platforms
+	var resultC TextMeasurementC
+	fnMeasureTextMetricsWithFontPtr(
 		uintptr(unsafe.Pointer(&textBytes[0])),
 		uintptr(unsafe.Pointer(&fontJSONBytes[0])),
+		uintptr(unsafe.Pointer(&resultC)),
 	)
-
 	runtime.KeepAlive(textBytes)
 	runtime.KeepAlive(fontJSONBytes)
-
 	return TextMeasurement{
-		Width:   result.Width,
-		Height:  result.Height,
-		Ascent:  result.Ascent,
-		Descent: result.Descent,
+		Width:   resultC.Width,
+		Height:  resultC.Height,
+		Ascent:  resultC.Ascent,
+		Descent: resultC.Descent,
 	}
 }
 
@@ -2486,10 +2483,11 @@ func SaveFileDialog(title, directory string, filters []FileFilter) (string, bool
 var trayMenuCallback func(index int)
 var trayCallbackPtr uintptr
 
-func trayCallback(index int32) {
+func trayCallback(index int32) uintptr {
 	if trayMenuCallback != nil {
 		trayMenuCallback(int(index))
 	}
+	return 0
 }
 
 func TrayIconCreate() error {

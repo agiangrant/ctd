@@ -549,6 +549,45 @@ pub fn set_backend(backend: WgpuBackend) {
     *guard = Some(backend);
 }
 
+/// Global state for frameless window rendering
+/// This allows the batch protocol render path to access window controls
+/// without going through the App struct in the event callback
+#[cfg(not(target_arch = "wasm32"))]
+struct FramelessState {
+    decorations: bool,
+    show_native_controls: bool,
+    dark_mode: bool,
+    scale_factor: f64,
+    #[cfg(target_os = "linux")]
+    window_controls: Option<crate::platform::linux::WindowControls>,
+    #[cfg(target_os = "windows")]
+    window_controls: Option<crate::platform::windows::WindowControls>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for FramelessState {
+    fn default() -> Self {
+        Self {
+            decorations: true,
+            show_native_controls: false,
+            dark_mode: false,
+            scale_factor: 1.0,
+            #[cfg(target_os = "linux")]
+            window_controls: None,
+            #[cfg(target_os = "windows")]
+            window_controls: None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static FRAMELESS_STATE: OnceLock<Mutex<FramelessState>> = OnceLock::new();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_frameless_state() -> &'static Mutex<FramelessState> {
+    FRAMELESS_STATE.get_or_init(|| Mutex::new(FramelessState::default()))
+}
+
 /// Create a rendering backend with a native window handle (macOS: NSView pointer)
 ///
 /// This is the primary way to initialize rendering from Go/C.
@@ -1656,6 +1695,15 @@ struct App {
     window_controls: Option<crate::platform::linux::WindowControls>,
     #[cfg(target_os = "linux")]
     current_dark_mode: u8,
+    // Windows-specific: window controls and resize handling
+    #[cfg(target_os = "windows")]
+    mouse_position: (f64, f64),
+    #[cfg(target_os = "windows")]
+    resize_direction: Option<winit::window::ResizeDirection>,
+    #[cfg(target_os = "windows")]
+    window_controls: Option<crate::platform::windows::WindowControls>,
+    #[cfg(target_os = "windows")]
+    current_dark_mode: u8,
 }
 
 // Modifier flags for keyboard events (passed in data2)
@@ -1987,6 +2035,72 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         }
 
+                        // Windows frameless window: add rounded corner clipping, window controls, and border
+                        #[cfg(target_os = "windows")]
+                        {
+                            if !all_commands.is_empty() && !self.config.decorations {
+                                let window_radius = crate::platform::windows::WINDOW_CORNER_RADIUS;
+
+                                // Extract the background color from Clear command and replace with transparent
+                                let mut bg_color: Option<crate::style::Color> = None;
+                                for cmd in all_commands.iter_mut() {
+                                    if let RenderCommand::Clear(color) = cmd {
+                                        bg_color = Some(*color);
+                                        *color = crate::style::Color { r: 0, g: 0, b: 0, a: 0 };
+                                        break;
+                                    }
+                                }
+
+                                // Insert rounded corner clipping at the beginning (after Clear)
+                                let rounded_clip = RenderCommand::PushRoundedClip {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: logical_width as f32,
+                                    height: logical_height as f32,
+                                    corner_radii: [window_radius, window_radius, window_radius, window_radius],
+                                };
+
+                                let insert_pos = all_commands.iter()
+                                    .position(|cmd| !matches!(cmd, RenderCommand::Clear(_)))
+                                    .unwrap_or(0);
+                                all_commands.insert(insert_pos, rounded_clip);
+
+                                // Draw background rect inside the stencil clip
+                                if let Some(color) = bg_color {
+                                    let bg_rect = RenderCommand::DrawRect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: logical_width as f32,
+                                        height: logical_height as f32,
+                                        color: ((color.r as u32) << 24) | ((color.g as u32) << 16) | ((color.b as u32) << 8) | (color.a as u32),
+                                        corner_radii: [0.0, 0.0, 0.0, 0.0],
+                                        rotation: 0.0,
+                                        border: None,
+                                        gradient: None,
+                                    };
+                                    all_commands.insert(insert_pos + 1, bg_rect);
+                                }
+
+                                // Add window controls (inside the clipped area, like Linux)
+                                if let Some(ref controls) = self.window_controls {
+                                    let control_commands = controls.to_render_commands(logical_width as f32);
+                                    all_commands.extend(control_commands);
+                                }
+
+                                // End rounded corner clipping
+                                all_commands.push(RenderCommand::PopClip {});
+
+                                // Add window border
+                                let is_dark = self.current_dark_mode == 1;
+                                let border_cmd = crate::platform::windows::window_border_command(
+                                    logical_width as f32,
+                                    logical_height as f32,
+                                    is_dark,
+                                );
+                                all_commands.push(border_cmd);
+                            }
+                        }
+
                         if !all_commands.is_empty() {
                             if let Err(e) = backend.render_frame(&all_commands) {
                                 eprintln!("Render error: {}", e);
@@ -2192,14 +2306,6 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        // Log all window events for debugging
-        match &event {
-            WindowEvent::Resized(_) | WindowEvent::Touch(_) | WindowEvent::RedrawRequested => {
-                println!("[FFI] window_event: {:?}", event);
-            }
-            _ => {}
-        }
-
         match event {
             WindowEvent::CloseRequested => {
                 let event = AppEvent {
@@ -2258,7 +2364,33 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(ref mut controls) = self.window_controls {
                         if let Some(ref window) = self.window {
                             controls.maximize_state.maximized = window.is_maximized();
+                            // Sync to global frameless state for batch rendering
+                            if let Ok(mut state) = get_frameless_state().lock() {
+                                state.window_controls = Some(controls.clone());
+                            }
                         }
+                    }
+                }
+
+                // Windows: update maximize button state after resize
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(ref mut controls) = self.window_controls {
+                        if let Some(ref window) = self.window {
+                            controls.maximize_state.maximized = window.is_maximized();
+                            // Sync to global frameless state for batch rendering
+                            if let Ok(mut state) = get_frameless_state().lock() {
+                                state.window_controls = Some(controls.clone());
+                            }
+                        }
+                    }
+                }
+
+                // Update scale factor in frameless state for batch rendering
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                {
+                    if let Ok(mut state) = get_frameless_state().lock() {
+                        state.scale_factor = scale_factor;
                     }
                 }
 
@@ -2396,6 +2528,68 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         }
 
+                        // Windows frameless window: add rounded corner clipping, window controls, and border
+                        // Only process if Go sent commands - if empty, Go rendered via different path
+                        #[cfg(target_os = "windows")]
+                        {
+                            if !all_commands.is_empty() && !self.config.decorations {
+                                let window_radius = crate::platform::windows::WINDOW_CORNER_RADIUS;
+
+                                let mut bg_color: Option<crate::style::Color> = None;
+                                for cmd in all_commands.iter_mut() {
+                                    if let RenderCommand::Clear(color) = cmd {
+                                        bg_color = Some(*color);
+                                        *color = crate::style::Color { r: 0, g: 0, b: 0, a: 0 };
+                                        break;
+                                    }
+                                }
+
+                                let rounded_clip = RenderCommand::PushRoundedClip {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: logical_width as f32,
+                                    height: logical_height as f32,
+                                    corner_radii: [window_radius, window_radius, window_radius, window_radius],
+                                };
+
+                                let insert_pos = all_commands.iter()
+                                    .position(|cmd| !matches!(cmd, RenderCommand::Clear(_)))
+                                    .unwrap_or(0);
+                                all_commands.insert(insert_pos, rounded_clip);
+
+                                if let Some(color) = bg_color {
+                                    let bg_rect = RenderCommand::DrawRect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: logical_width as f32,
+                                        height: logical_height as f32,
+                                        color: ((color.r as u32) << 24) | ((color.g as u32) << 16) | ((color.b as u32) << 8) | (color.a as u32),
+                                        corner_radii: [0.0, 0.0, 0.0, 0.0],
+                                        rotation: 0.0,
+                                        border: None,
+                                        gradient: None,
+                                    };
+                                    all_commands.insert(insert_pos + 1, bg_rect);
+                                }
+
+                                // Add window controls (inside the clipped area, like Linux)
+                                if let Some(ref controls) = self.window_controls {
+                                    let control_commands = controls.to_render_commands(logical_width as f32);
+                                    all_commands.extend(control_commands);
+                                }
+
+                                all_commands.push(RenderCommand::PopClip {});
+
+                                let is_dark = self.current_dark_mode == 1;
+                                let border_cmd = crate::platform::windows::window_border_command(
+                                    logical_width as f32,
+                                    logical_height as f32,
+                                    is_dark,
+                                );
+                                all_commands.push(border_cmd);
+                            }
+                        }
+
                         // Execute all commands
                         if !all_commands.is_empty() {
                             if let Err(e) = backend.render_frame(&all_commands) {
@@ -2450,6 +2644,10 @@ impl ApplicationHandler<UserEvent> for App {
                         let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
                         let window_width = size.width as f32 / scale_factor as f32;
                         if controls.update_hover(logical_x as f32, logical_y as f32, window_width) {
+                            // Sync to global frameless state for batch rendering
+                            if let Ok(mut state) = get_frameless_state().lock() {
+                                state.window_controls = Some(controls.clone());
+                            }
                             // Hover state changed, request redraw
                             if let Some(ref window) = self.window {
                                 window.request_redraw();
@@ -2492,6 +2690,59 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
 
+                // Windows: track mouse position for window controls and resize
+                #[cfg(target_os = "windows")]
+                {
+                    self.mouse_position = (logical_x, logical_y);
+
+                    // Update window control hover states
+                    if let Some(ref mut controls) = self.window_controls {
+                        let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
+                        let window_width = size.width as f32 / scale_factor as f32;
+                        if controls.update_hover(logical_x as f32, logical_y as f32, window_width) {
+                            // Sync to global frameless state for batch rendering
+                            if let Ok(mut state) = get_frameless_state().lock() {
+                                state.window_controls = Some(controls.clone());
+                            }
+                            if let Some(ref window) = self.window {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+
+                    // Update cursor for resize edges on frameless windows
+                    if !self.config.decorations && self.config.resizable {
+                        use crate::platform::windows::window_controls::{detect_resize_edge, HEADER_HEIGHT};
+                        let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
+                        let window_width = size.width as f32 / scale_factor as f32;
+                        let window_height = size.height as f32 / scale_factor as f32;
+
+                        let edge = if logical_y as f32 > HEADER_HEIGHT || self.window_controls.is_none() {
+                            detect_resize_edge(logical_x as f32, logical_y as f32, window_width, window_height)
+                        } else {
+                            None
+                        };
+
+                        if let Some(ref window) = self.window {
+                            use winit::window::CursorIcon;
+                            let cursor = match edge {
+                                Some(crate::platform::windows::window_controls::ResizeEdge::Top) |
+                                Some(crate::platform::windows::window_controls::ResizeEdge::Bottom) => CursorIcon::NsResize,
+                                Some(crate::platform::windows::window_controls::ResizeEdge::Left) |
+                                Some(crate::platform::windows::window_controls::ResizeEdge::Right) => CursorIcon::EwResize,
+                                Some(crate::platform::windows::window_controls::ResizeEdge::TopLeft) |
+                                Some(crate::platform::windows::window_controls::ResizeEdge::BottomRight) => CursorIcon::NwseResize,
+                                Some(crate::platform::windows::window_controls::ResizeEdge::TopRight) |
+                                Some(crate::platform::windows::window_controls::ResizeEdge::BottomLeft) => CursorIcon::NeswResize,
+                                None => CursorIcon::Default,
+                            };
+                            window.set_cursor(cursor);
+                        }
+
+                        self.resize_direction = edge.map(|e| e.to_resize_direction());
+                    }
+                }
+
                 let event = AppEvent {
                     event_type: AppEventType::MouseMoved,
                     data1: logical_x,
@@ -2513,6 +2764,24 @@ impl ApplicationHandler<UserEvent> for App {
                 {
                     if let Some(ref mut controls) = self.window_controls {
                         controls.clear_hover();
+                        // Sync to global frameless state for batch rendering
+                        if let Ok(mut state) = get_frameless_state().lock() {
+                            state.window_controls = Some(controls.clone());
+                        }
+                        if let Some(ref window) = self.window {
+                            window.request_redraw();
+                        }
+                    }
+                }
+                // Windows: clear hover states when cursor leaves window
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(ref mut controls) = self.window_controls {
+                        controls.clear_hover();
+                        // Sync to global frameless state for batch rendering
+                        if let Ok(mut state) = get_frameless_state().lock() {
+                            state.window_controls = Some(controls.clone());
+                        }
                         if let Some(ref window) = self.window {
                             window.request_redraw();
                         }
@@ -2563,6 +2832,10 @@ impl ApplicationHandler<UserEvent> for App {
                                             // Update maximized state in controls
                                             if let Some(ref mut controls) = self.window_controls {
                                                 controls.maximize_state.maximized = window.is_maximized();
+                                                // Sync to global frameless state for batch rendering
+                                                if let Ok(mut state) = get_frameless_state().lock() {
+                                                    state.window_controls = Some(controls.clone());
+                                                }
                                             }
                                             window.request_redraw();
                                         }
@@ -2600,6 +2873,86 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
 
+                // Windows: handle window control clicks and resize
+                #[cfg(target_os = "windows")]
+                {
+                    if button == winit::event::MouseButton::Left && state == ElementState::Pressed {
+                        let scale_factor = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+                        let size = self.window.as_ref().map(|w| get_window_size(w)).unwrap_or_default();
+                        let window_width = size.width as f32 / scale_factor as f32;
+
+                        // Check for window control button clicks
+                        if let Some(ref controls) = self.window_controls {
+                            use crate::platform::windows::window_controls::ButtonKind;
+                            if let Some(kind) = controls.hit_test(self.mouse_position.0 as f32, self.mouse_position.1 as f32, window_width) {
+                                match kind {
+                                    ButtonKind::Close => {
+                                        let close_event = AppEvent {
+                                            event_type: AppEventType::CloseRequested,
+                                            data1: 0.0,
+                                            data2: 0.0,
+                                            scale_factor: 1.0,
+                                        };
+                                        let _ = self.call_callback(&close_event);
+                                        self.should_exit = true;
+                                        event_loop.exit();
+                                        return;
+                                    }
+                                    ButtonKind::Minimize => {
+                                        if let Some(ref window) = self.window {
+                                            window.set_minimized(true);
+                                        }
+                                        return;
+                                    }
+                                    ButtonKind::Maximize => {
+                                        if let Some(ref window) = self.window {
+                                            if window.is_maximized() {
+                                                window.set_maximized(false);
+                                            } else {
+                                                window.set_maximized(true);
+                                            }
+                                            if let Some(ref mut controls) = self.window_controls {
+                                                controls.maximize_state.maximized = window.is_maximized();
+                                                // Sync to global frameless state for batch rendering
+                                                if let Ok(mut state) = get_frameless_state().lock() {
+                                                    state.window_controls = Some(controls.clone());
+                                                }
+                                            }
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check for resize edge drag
+                        if let Some(direction) = self.resize_direction {
+                            if let Some(ref window) = self.window {
+                                let _ = window.drag_resize_window(direction);
+                            }
+                            return;
+                        }
+
+                        // Check for title bar drag (header area, excluding buttons)
+                        if !self.config.decorations {
+                            use crate::platform::windows::window_controls::HEADER_HEIGHT;
+                            let (mx, my) = self.mouse_position;
+                            if my < HEADER_HEIGHT as f64 {
+                                let on_button = self.window_controls.as_ref()
+                                    .map(|c| c.hit_test(mx as f32, my as f32, window_width).is_some())
+                                    .unwrap_or(false);
+                                if !on_button {
+                                    if let Some(ref window) = self.window {
+                                        let _ = window.drag_window();
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let event_type = match state {
                     ElementState::Pressed => AppEventType::MousePressed,
                     ElementState::Released => AppEventType::MouseReleased,
@@ -2628,9 +2981,9 @@ impl ApplicationHandler<UserEvent> for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let (mut dx, mut dy) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x as f64 * 20.0, y as f64 * 20.0),
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
+                let (mut dx, mut dy, is_line_delta) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x as f64 * 20.0, y as f64 * 20.0, true),
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y, false),
                 };
 
                 // On Linux, winit gives us "natural" scroll deltas.
@@ -2643,6 +2996,28 @@ impl ApplicationHandler<UserEvent> for App {
                         dy = -dy;
                     }
                 }
+
+                // On Windows, winit gives us traditional scroll deltas (opposite of macOS).
+                // We flip to match macOS convention (natural scrolling), checking the
+                // appropriate setting based on input device type:
+                // - LineDelta = mouse wheel (discrete notches) -> check FlipFlopWheel
+                // - PixelDelta = touchpad (smooth scroll) -> check ScrollDirection
+                #[cfg(target_os = "windows")]
+                {
+                    use crate::platform::windows::{is_mouse_natural_scrolling, is_touchpad_natural_scrolling};
+                    let is_natural = if is_line_delta {
+                        is_mouse_natural_scrolling()
+                    } else {
+                        is_touchpad_natural_scrolling()
+                    };
+                    if !is_natural {
+                        // Windows default: flip to match macOS natural scrolling convention
+                        dy = -dy;
+                    }
+                }
+
+                // Suppress unused variable warning on non-Windows platforms
+                let _ = is_line_delta;
 
                 let event = AppEvent {
                     event_type: AppEventType::MouseWheel,
@@ -2859,6 +3234,17 @@ impl App {
 
     /// Update window controls theme if dark mode changed (Linux only)
     #[cfg(target_os = "linux")]
+    fn update_dark_mode(&mut self, new_dark_mode: u8) {
+        if new_dark_mode != self.current_dark_mode {
+            self.current_dark_mode = new_dark_mode;
+            if let Some(ref mut controls) = self.window_controls {
+                controls.update_theme_from_app(new_dark_mode);
+            }
+        }
+    }
+
+    /// Update window controls theme if dark mode changed (Windows)
+    #[cfg(target_os = "windows")]
     fn update_dark_mode(&mut self, new_dark_mode: u8) {
         if new_dark_mode != self.current_dark_mode {
             self.current_dark_mode = new_dark_mode;
@@ -3450,7 +3836,43 @@ unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
         },
         #[cfg(target_os = "linux")]
         current_dark_mode: config.dark_mode,
+        // Windows window controls initialization
+        #[cfg(target_os = "windows")]
+        mouse_position: (0.0, 0.0),
+        #[cfg(target_os = "windows")]
+        resize_direction: None,
+        #[cfg(target_os = "windows")]
+        window_controls: if !config.decorations && config.show_native_controls {
+            Some(crate::platform::windows::WindowControls::with_dark_mode(
+                true, // close
+                config.enable_minimize,
+                config.enable_maximize,
+                config.dark_mode,
+            ))
+        } else {
+            None
+        },
+        #[cfg(target_os = "windows")]
+        current_dark_mode: config.dark_mode,
     };
+
+    // Also update global frameless state for batch protocol access
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        if let Ok(mut state) = get_frameless_state().lock() {
+            state.decorations = config.decorations;
+            state.show_native_controls = config.show_native_controls;
+            state.dark_mode = config.dark_mode == 1;
+            #[cfg(target_os = "linux")]
+            {
+                state.window_controls = app.window_controls.clone();
+            }
+            #[cfg(target_os = "windows")]
+            {
+                state.window_controls = app.window_controls.clone();
+            }
+        }
+    }
 
     // Run the event loop (blocks until exit)
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -3760,10 +4182,49 @@ pub extern "C" fn centered_system_dark_mode() -> i32 {
     {
         // Check Windows registry for dark mode setting
         // HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
-        // AppsUseLightTheme = 0 means dark mode
-        // Note: This requires the winreg crate which we don't have, so return -1 for now
-        // A proper implementation would use the Windows API directly
-        -1 // TODO: Implement Windows dark mode detection
+        // AppsUseLightTheme = 0 means dark mode, 1 means light mode
+        use windows::Win32::System::Registry::*;
+        use windows::core::*;
+
+        unsafe {
+            let key_path = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+            let value_name = w!("AppsUseLightTheme");
+
+            let mut hkey = HKEY::default();
+            let result = RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                key_path,
+                0,
+                KEY_READ,
+                &mut hkey,
+            );
+
+            if result.is_err() {
+                return -1; // Unable to open registry key
+            }
+
+            let mut value: u32 = 1; // Default to light mode
+            let mut value_size = std::mem::size_of::<u32>() as u32;
+            let mut value_type = REG_NONE;
+
+            let query_result = RegQueryValueExW(
+                hkey,
+                value_name,
+                None,
+                Some(&mut value_type),
+                Some(&mut value as *mut u32 as *mut u8),
+                Some(&mut value_size),
+            );
+
+            let _ = RegCloseKey(hkey);
+
+            if query_result.is_err() {
+                return -1; // Unable to query registry value
+            }
+
+            // AppsUseLightTheme: 0 = dark mode, 1 = light mode
+            if value == 0 { 1 } else { 0 }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -3892,7 +4353,61 @@ pub extern "C" fn centered_clipboard_get() -> *const c_char {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HGLOBAL;
+        use windows::Win32::System::DataExchange::*;
+        use windows::Win32::System::Memory::*;
+
+        // CF_UNICODETEXT = 13
+        const CF_UNICODETEXT: u32 = 13;
+
+        unsafe {
+            if OpenClipboard(None).is_err() {
+                return ptr::null();
+            }
+
+            let handle = GetClipboardData(CF_UNICODETEXT);
+            if handle.is_err() {
+                let _ = CloseClipboard();
+                return ptr::null();
+            }
+            let handle = handle.unwrap();
+
+            // Convert HANDLE to HGLOBAL for GlobalLock
+            let hglobal: HGLOBAL = std::mem::transmute(handle);
+            let data = GlobalLock(hglobal);
+            if data.is_null() {
+                let _ = CloseClipboard();
+                return ptr::null();
+            }
+
+            // Read UTF-16 string
+            let wide_ptr = data as *const u16;
+            let mut len = 0;
+            while *wide_ptr.add(len) != 0 {
+                len += 1;
+            }
+            let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
+            let rust_str = String::from_utf16_lossy(wide_slice);
+
+            let _ = GlobalUnlock(hglobal);
+            let _ = CloseClipboard();
+
+            match CString::new(rust_str) {
+                Ok(cstring) => {
+                    let ptr = cstring.as_ptr();
+                    if let Ok(mut guard) = CLIPBOARD_STRING.lock() {
+                        *guard = Some(cstring);
+                    }
+                    ptr
+                }
+                Err(_) => ptr::null(),
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     {
         ptr::null()
     }
@@ -3955,7 +4470,53 @@ pub unsafe extern "C" fn centered_clipboard_set(text: *const c_char) {
         let _: () = msg_send![ns_string, release];
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::DataExchange::*;
+        use windows::Win32::System::Memory::*;
+
+        // CF_UNICODETEXT = 13
+        const CF_UNICODETEXT: u32 = 13;
+
+        // Convert UTF-8 to UTF-16
+        let wide: Vec<u16> = text_str.encode_utf16().chain(std::iter::once(0)).collect();
+        let size = wide.len() * 2; // Size in bytes
+
+        if OpenClipboard(None).is_err() {
+            return;
+        }
+
+        let _ = EmptyClipboard();
+
+        // Allocate global memory for the clipboard
+        let hmem = GlobalAlloc(GMEM_MOVEABLE, size);
+        if hmem.is_err() {
+            let _ = CloseClipboard();
+            return;
+        }
+        let hmem = hmem.unwrap();
+
+        let dest = GlobalLock(hmem);
+        if dest.is_null() {
+            // Can't free hmem here easily, but this is rare error case
+            let _ = CloseClipboard();
+            return;
+        }
+
+        // Copy the UTF-16 string
+        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, dest as *mut u8, size);
+        let _ = GlobalUnlock(hmem);
+
+        // Set clipboard data - clipboard takes ownership of hmem on success
+        // Convert HGLOBAL to HANDLE for SetClipboardData
+        let handle: HANDLE = std::mem::transmute(hmem);
+        let _ = SetClipboardData(CF_UNICODETEXT, handle);
+
+        let _ = CloseClipboard();
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     {
         let _ = text_str; // Suppress unused variable warning
     }
@@ -4948,6 +5509,691 @@ mod tray_icon {
     }
 }
 
+#[cfg(target_os = "windows")]
+mod tray_icon {
+    use std::ffi::CStr;
+    use std::os::raw::c_char;
+    use std::sync::Mutex;
+    use std::ptr;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::UI::Shell::*;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    /// Custom message for tray icon callbacks
+    const WM_TRAY_CALLBACK: u32 = WM_USER + 1;
+
+    /// Menu item info
+    struct MenuItem {
+        label: String,
+        enabled: bool,
+        checked: bool,
+        is_separator: bool,
+    }
+
+    /// Tray icon state
+    struct TrayState {
+        hwnd: HWND,
+        icon_id: u32,
+        hicon: HICON,
+        tooltip: String,
+        menu: Option<HMENU>,
+        menu_items: Vec<MenuItem>,
+        visible: bool,
+        callback: Option<extern "C" fn(i32)>,
+    }
+
+    unsafe impl Send for TrayState {}
+
+    impl Default for TrayState {
+        fn default() -> Self {
+            Self {
+                hwnd: HWND::default(),
+                icon_id: 1,
+                hicon: HICON::default(),
+                tooltip: String::new(),
+                menu: None,
+                menu_items: Vec::new(),
+                visible: true,
+                callback: None,
+            }
+        }
+    }
+
+    static TRAY_STATE: Mutex<Option<TrayState>> = Mutex::new(None);
+
+    /// Window procedure for the message window
+    unsafe extern "system" fn tray_window_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match msg {
+            WM_TRAY_CALLBACK => {
+                let event = (lparam.0 & 0xFFFF) as u32;
+
+                // Right-click shows context menu
+                if event == WM_RBUTTONUP {
+                    show_context_menu(hwnd);
+                }
+
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                PostQuitMessage(0);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+
+    /// Show the context menu at cursor position
+    unsafe fn show_context_menu(hwnd: HWND) {
+        let guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(menu) = state.menu {
+            let mut point = POINT::default();
+            let _ = GetCursorPos(&mut point);
+
+            // Required for menu to work properly
+            let _ = SetForegroundWindow(hwnd);
+
+            let cmd = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_NONOTIFY,
+                point.x,
+                point.y,
+                0,
+                hwnd,
+                None,
+            );
+
+            // Send dummy message to close menu properly
+            let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+
+            // Call callback with selected item index
+            if cmd.0 > 0 {
+                if let Some(callback) = state.callback {
+                    drop(guard); // Release lock before callback
+                    callback((cmd.0 - 1) as i32); // Convert to 0-based index
+                }
+            }
+        }
+    }
+
+    /// Create hidden message window for tray callbacks
+    unsafe fn create_message_window() -> Result<HWND, i32> {
+        let class_name_wide: Vec<u16> = "CenteredTrayWindow\0".encode_utf16().collect();
+
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(tray_window_proc),
+            hInstance: HINSTANCE::default(),
+            lpszClassName: PCWSTR::from_raw(class_name_wide.as_ptr()),
+            ..Default::default()
+        };
+
+        // Register class (may already be registered)
+        let _ = RegisterClassExW(&wc);
+
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            PCWSTR::from_raw(class_name_wide.as_ptr()),
+            PCWSTR::null(),
+            WINDOW_STYLE::default(),
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            None,
+            None,
+            None,
+        );
+
+        match hwnd {
+            Ok(h) if h != HWND::default() => Ok(h),
+            _ => Err(-1),
+        }
+    }
+
+    /// Create the tray icon
+    pub fn create() -> i32 {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        if guard.is_some() {
+            return 1; // Already created
+        }
+
+        unsafe {
+            let hwnd = match create_message_window() {
+                Ok(h) => h,
+                Err(e) => return e,
+            };
+
+            // Create a default icon (app icon or system default)
+            let hicon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+
+            let mut tooltip_wide: [u16; 128] = [0; 128];
+            let default_tooltip = "App";
+            for (i, ch) in default_tooltip.encode_utf16().take(127).enumerate() {
+                tooltip_wide[i] = ch;
+            }
+
+            let mut nid = NOTIFYICONDATAW::default();
+            nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = hwnd;
+            nid.uID = 1;
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            nid.uCallbackMessage = WM_TRAY_CALLBACK;
+            nid.hIcon = hicon;
+            nid.szTip = tooltip_wide;
+
+            if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
+                let _ = DestroyWindow(hwnd);
+                return -2;
+            }
+
+            // Set version for modern behavior
+            nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+            let _ = Shell_NotifyIconW(NIM_SETVERSION, &nid);
+
+            *guard = Some(TrayState {
+                hwnd,
+                icon_id: 1,
+                hicon,
+                tooltip: default_tooltip.to_string(),
+                menu: None,
+                menu_items: Vec::new(),
+                visible: true,
+                callback: None,
+            });
+        }
+
+        0
+    }
+
+    /// Destroy the tray icon
+    pub fn destroy() {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        if let Some(state) = guard.take() {
+            unsafe {
+                let mut nid = NOTIFYICONDATAW::default();
+                nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+                nid.hWnd = state.hwnd;
+                nid.uID = state.icon_id;
+
+                let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+
+                if let Some(menu) = state.menu {
+                    let _ = DestroyMenu(menu);
+                }
+
+                let _ = DestroyWindow(state.hwnd);
+            }
+        }
+    }
+
+    /// Create HICON from RGBA data
+    unsafe fn create_icon_from_rgba(rgba: &[u8], width: u32, height: u32) -> Result<HICON, i32> {
+        if rgba.len() != (width * height * 4) as usize {
+            return Err(-3);
+        }
+
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32), // Top-down DIB
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0, // BI_RGB
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let hdc = GetDC(None);
+        let mut bits_ptr: *mut std::ffi::c_void = ptr::null_mut();
+
+        let color_bitmap = match CreateDIBSection(
+            hdc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits_ptr,
+            None,
+            0,
+        ) {
+            Ok(bmp) if !bmp.is_invalid() && !bits_ptr.is_null() => bmp,
+            _ => {
+                ReleaseDC(None, hdc);
+                return Err(-3);
+            }
+        };
+
+        // Copy RGBA to BGRA
+        let bits = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, rgba.len());
+        for i in (0..rgba.len()).step_by(4) {
+            bits[i] = rgba[i + 2];     // B
+            bits[i + 1] = rgba[i + 1]; // G
+            bits[i + 2] = rgba[i];     // R
+            bits[i + 3] = rgba[i + 3]; // A
+        }
+
+        let mask_bitmap = CreateBitmap(width as i32, height as i32, 1, 1, None);
+        if mask_bitmap.is_invalid() {
+            let _ = DeleteObject(color_bitmap);
+            ReleaseDC(None, hdc);
+            return Err(-3);
+        }
+
+        let icon_info = ICONINFO {
+            fIcon: BOOL(1),
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask_bitmap,
+            hbmColor: color_bitmap,
+        };
+
+        let hicon = CreateIconIndirect(&icon_info);
+
+        let _ = DeleteObject(color_bitmap);
+        let _ = DeleteObject(mask_bitmap);
+        ReleaseDC(None, hdc);
+
+        hicon.map_err(|_| -3)
+    }
+
+    /// Set icon from file path
+    pub unsafe fn set_icon_file(path: *const c_char) -> i32 {
+        if path.is_null() {
+            return -3;
+        }
+
+        let path_str = match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => return -3,
+        };
+
+        // Load image using the image crate
+        let img = match image::open(path_str) {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+
+        // Create icon from RGBA
+        let hicon = match create_icon_from_rgba(rgba.as_raw(), width, height) {
+            Ok(h) => h,
+            Err(e) => return e,
+        };
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return -1,
+        };
+
+        // Update the icon
+        state.hicon = hicon;
+
+        let mut nid = NOTIFYICONDATAW::default();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = state.hwnd;
+        nid.uID = state.icon_id;
+        nid.uFlags = NIF_ICON;
+        nid.hIcon = hicon;
+
+        if !Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool() {
+            return -2;
+        }
+
+        0
+    }
+
+    /// Set icon from raw image data (PNG/JPEG bytes)
+    pub unsafe fn set_icon_data(data: *const u8, length: usize) -> i32 {
+        if data.is_null() || length == 0 {
+            return -3;
+        }
+
+        let bytes = std::slice::from_raw_parts(data, length);
+
+        // Decode image using the image crate
+        let img = match image::load_from_memory(bytes) {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+
+        let hicon = match create_icon_from_rgba(rgba.as_raw(), width, height) {
+            Ok(h) => h,
+            Err(e) => return e,
+        };
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return -1,
+        };
+
+        state.hicon = hicon;
+
+        let mut nid = NOTIFYICONDATAW::default();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = state.hwnd;
+        nid.uID = state.icon_id;
+        nid.uFlags = NIF_ICON;
+        nid.hIcon = hicon;
+
+        if !Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool() {
+            return -2;
+        }
+
+        0
+    }
+
+    /// Set tooltip
+    pub unsafe fn set_tooltip(tooltip: *const c_char) {
+        if tooltip.is_null() {
+            return;
+        }
+
+        let tooltip_str = match CStr::from_ptr(tooltip).to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        state.tooltip = tooltip_str.to_string();
+
+        let mut tooltip_wide: [u16; 128] = [0; 128];
+        for (i, ch) in tooltip_str.encode_utf16().take(127).enumerate() {
+            tooltip_wide[i] = ch;
+        }
+
+        let mut nid = NOTIFYICONDATAW::default();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = state.hwnd;
+        nid.uID = state.icon_id;
+        nid.uFlags = NIF_TIP;
+        nid.szTip = tooltip_wide;
+
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+
+    /// Set title (Windows uses tooltip, no separate title)
+    pub unsafe fn set_title(title: *const c_char) {
+        // Windows tray icons don't have a separate title, use tooltip
+        set_tooltip(title);
+    }
+
+    /// Clear menu
+    pub fn clear_menu() {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(menu) = state.menu.take() {
+            unsafe {
+                let _ = DestroyMenu(menu);
+            }
+        }
+        state.menu_items.clear();
+    }
+
+    /// Rebuild the popup menu from menu_items
+    unsafe fn rebuild_menu(state: &mut TrayState) {
+        if let Some(menu) = state.menu.take() {
+            let _ = DestroyMenu(menu);
+        }
+
+        if state.menu_items.is_empty() {
+            return;
+        }
+
+        let menu = match CreatePopupMenu() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        for (i, item) in state.menu_items.iter().enumerate() {
+            if item.is_separator {
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            } else {
+                let mut flags = MF_STRING;
+                if !item.enabled {
+                    flags |= MF_GRAYED;
+                }
+                if item.checked {
+                    flags |= MF_CHECKED;
+                }
+
+                let label_wide: Vec<u16> = item.label.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(
+                    menu,
+                    flags,
+                    (i + 1) as usize, // 1-based ID for TrackPopupMenu
+                    PCWSTR::from_raw(label_wide.as_ptr()),
+                );
+            }
+        }
+
+        state.menu = Some(menu);
+    }
+
+    /// Add menu item
+    pub unsafe fn add_menu_item(
+        label: *const c_char,
+        enabled: i32,
+        checked: i32,
+        is_separator: i32,
+    ) -> i32 {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return -1,
+        };
+
+        let label_str = if is_separator != 0 || label.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(label).to_str().unwrap_or("").to_string()
+        };
+
+        let index = state.menu_items.len() as i32;
+
+        state.menu_items.push(MenuItem {
+            label: label_str,
+            enabled: enabled != 0,
+            checked: checked != 0,
+            is_separator: is_separator != 0,
+        });
+
+        rebuild_menu(state);
+
+        index
+    }
+
+    /// Set menu item enabled state
+    pub fn set_menu_item_enabled(index: i32, enabled: i32) {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(item) = state.menu_items.get_mut(index as usize) {
+            item.enabled = enabled != 0;
+            unsafe { rebuild_menu(state); }
+        }
+    }
+
+    /// Set menu item checked state
+    pub fn set_menu_item_checked(index: i32, checked: i32) {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(item) = state.menu_items.get_mut(index as usize) {
+            item.checked = checked != 0;
+            unsafe { rebuild_menu(state); }
+        }
+    }
+
+    /// Set menu item label
+    pub unsafe fn set_menu_item_label(index: i32, label: *const c_char) {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let label_str = if label.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(label).to_str().unwrap_or("").to_string()
+        };
+
+        if let Some(item) = state.menu_items.get_mut(index as usize) {
+            item.label = label_str;
+            rebuild_menu(state);
+        }
+    }
+
+    /// Set visibility
+    pub fn set_visible(visible: i32) {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let was_visible = state.visible;
+        state.visible = visible != 0;
+
+        if was_visible == state.visible {
+            return;
+        }
+
+        unsafe {
+            let mut nid = NOTIFYICONDATAW::default();
+            nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = state.hwnd;
+            nid.uID = state.icon_id;
+
+            if visible != 0 {
+                // Re-add the icon
+                nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+                nid.uCallbackMessage = WM_TRAY_CALLBACK;
+                nid.hIcon = state.hicon;
+
+                let mut tooltip_wide: [u16; 128] = [0; 128];
+                for (i, ch) in state.tooltip.encode_utf16().take(127).enumerate() {
+                    tooltip_wide[i] = ch;
+                }
+                nid.szTip = tooltip_wide;
+
+                let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+            } else {
+                // Remove the icon
+                let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+            }
+        }
+    }
+
+    /// Get visibility
+    pub fn is_visible() -> i32 {
+        let guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+
+        match guard.as_ref() {
+            Some(state) => if state.visible { 1 } else { 0 },
+            None => 0,
+        }
+    }
+
+    /// Set callback
+    pub fn set_callback(callback: extern "C" fn(i32)) {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        if let Some(state) = guard.as_mut() {
+            state.callback = Some(callback);
+        }
+    }
+}
+
 /// Create a system tray icon
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
@@ -4956,7 +6202,11 @@ pub extern "C" fn centered_tray_icon_create() -> i32 {
     {
         tray_icon::create()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::create()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         -1
     }
@@ -4970,6 +6220,10 @@ pub extern "C" fn centered_tray_icon_destroy() {
     {
         tray_icon::destroy();
     }
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::destroy();
+    }
 }
 
 /// Set tray icon from file
@@ -4980,7 +6234,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_icon_file(path: *const c_char) -
     {
         tray_icon::set_icon_file(path)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_icon_file(path)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = path;
         -1
@@ -4995,7 +6253,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_icon_data(data: *const u8, lengt
     {
         tray_icon::set_icon_data(data, length as usize)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_icon_data(data, length as usize)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (data, length);
         -1
@@ -5010,7 +6272,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_tooltip(tooltip: *const c_char) 
     {
         tray_icon::set_tooltip(tooltip);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_tooltip(tooltip);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = tooltip;
     }
@@ -5024,7 +6290,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_title(title: *const c_char) {
     {
         tray_icon::set_title(title);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_title(title);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = title;
     }
@@ -5035,6 +6305,10 @@ pub unsafe extern "C" fn centered_tray_icon_set_title(title: *const c_char) {
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_clear_menu() {
     #[cfg(target_os = "macos")]
+    {
+        tray_icon::clear_menu();
+    }
+    #[cfg(target_os = "windows")]
     {
         tray_icon::clear_menu();
     }
@@ -5053,7 +6327,11 @@ pub unsafe extern "C" fn centered_tray_icon_add_menu_item(
     {
         tray_icon::add_menu_item(label, enabled, checked, is_separator)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::add_menu_item(label, enabled, checked, is_separator)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (label, enabled, checked, is_separator);
         -1
@@ -5068,7 +6346,11 @@ pub extern "C" fn centered_tray_icon_set_menu_item_enabled(index: i32, enabled: 
     {
         tray_icon::set_menu_item_enabled(index, enabled);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_menu_item_enabled(index, enabled);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (index, enabled);
     }
@@ -5082,7 +6364,11 @@ pub extern "C" fn centered_tray_icon_set_menu_item_checked(index: i32, checked: 
     {
         tray_icon::set_menu_item_checked(index, checked);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_menu_item_checked(index, checked);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (index, checked);
     }
@@ -5096,7 +6382,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_menu_item_label(index: i32, labe
     {
         tray_icon::set_menu_item_label(index, label);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_menu_item_label(index, label);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (index, label);
     }
@@ -5110,7 +6400,11 @@ pub extern "C" fn centered_tray_icon_set_visible(visible: i32) {
     {
         tray_icon::set_visible(visible);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_visible(visible);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = visible;
     }
@@ -5124,7 +6418,11 @@ pub extern "C" fn centered_tray_icon_is_visible() -> i32 {
     {
         tray_icon::is_visible()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::is_visible()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         0
     }
@@ -5138,7 +6436,11 @@ pub extern "C" fn centered_tray_icon_set_callback(callback: extern "C" fn(i32)) 
     {
         tray_icon::set_callback(callback);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        tray_icon::set_callback(callback);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = callback;
     }
@@ -5687,6 +6989,123 @@ pub unsafe extern "C" fn centered_measure_text_metrics_with_font_ptr(
     0
 }
 
+/// Windows implementation: Measure text with font and return metrics
+///
+/// # Safety
+/// - text must be a valid null-terminated UTF-8 string
+/// - font_json must be a valid null-terminated UTF-8 JSON string
+#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_metrics_with_font(
+    text: *const c_char,
+    font_json: *const c_char,
+) -> TextMeasurement {
+    use crate::text::FontDescriptor;
+
+    let error_result = TextMeasurement {
+        width: 0.0,
+        height: 0.0,
+        ascent: 0.0,
+        descent: 0.0,
+    };
+
+    if text.is_null() || font_json.is_null() {
+        return error_result;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return error_result,
+    };
+
+    let font_json_str = match CStr::from_ptr(font_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return error_result,
+    };
+
+    // Parse the font descriptor from JSON
+    let descriptor: FontDescriptor = match serde_json::from_str(font_json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to parse font descriptor JSON: {}", e);
+            return error_result;
+        }
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return error_result,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size for physical pixels
+    let scaled_descriptor = FontDescriptor {
+        source: descriptor.source,
+        weight: descriptor.weight,
+        style: descriptor.style,
+        size: descriptor.size * scale_factor,
+    };
+
+    // Use the backend's public methods to measure text
+    let backend_lock = get_backend();
+    let mut guard = match backend_lock.lock() {
+        Ok(g) => g,
+        Err(_) => return error_result,
+    };
+
+    if let Some(backend) = guard.as_mut() {
+        let width = if text_str.is_empty() {
+            0.0
+        } else {
+            backend.measure_string(text_str, &scaled_descriptor)
+        };
+
+        let (ascent, descent) = backend.get_font_metrics(&scaled_descriptor);
+        let height = ascent + descent;
+
+        TextMeasurement {
+            width: width / scale_factor,
+            height: height / scale_factor,
+            ascent: ascent / scale_factor,
+            descent: descent / scale_factor,
+        }
+    } else {
+        error_result
+    }
+}
+
+/// Windows implementation: Pointer-based version
+///
+/// # Safety
+/// - text must be a valid null-terminated UTF-8 string
+/// - font_json must be a valid null-terminated UTF-8 JSON string
+/// - out must be a valid pointer to a TextMeasurement struct
+#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_metrics_with_font_ptr(
+    text: *const c_char,
+    font_json: *const c_char,
+    out: *mut TextMeasurement,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+
+    let result = centered_measure_text_metrics_with_font(text, font_json);
+    *out = result;
+    0
+}
+
 // Android implementations for text measurement using JNI Canvas API
 #[cfg(target_os = "android")]
 #[cfg(not(target_arch = "wasm32"))]
@@ -5875,6 +7294,129 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
 
     // Use the LinuxGlyphRasterizer's measure_string which handles bundled fonts
     let mut rasterizer = crate::text::atlas::LinuxGlyphRasterizer::new();
+    let width = rasterizer.measure_string(text_str, &scaled_descriptor);
+
+    // Convert back to logical pixels
+    width / scale_factor
+}
+
+// Windows implementations for text measurement using DirectWrite
+#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_to_cursor(
+    text: *const c_char,
+    char_index: u32,
+    font_name: *const c_char,
+    font_size: f32,
+) -> f32 {
+    if text.is_null() || font_name.is_null() {
+        return 0.0;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Get substring up to char_index
+    let substring: String = text_str.chars().take(char_index as usize).collect();
+
+    if substring.is_empty() {
+        return 0.0;
+    }
+
+    let font_name_str = match CStr::from_ptr(font_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return 0.0,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size just like rendering does
+    let scaled_font_size = font_size * scale_factor;
+
+    // Use WindowsGlyphRasterizer to measure the substring
+    let mut rasterizer = crate::text::atlas::WindowsGlyphRasterizer::new();
+    let descriptor = FontDescriptor::system(font_name_str, 400, FontStyle::Normal, scaled_font_size);
+
+    // Measure the whole substring at once
+    let total_width = rasterizer.measure_string(&substring, &descriptor);
+
+    // Convert back to logical pixels
+    total_width / scale_factor
+}
+
+#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_with_font(
+    text: *const c_char,
+    font_json: *const c_char,
+) -> f32 {
+    if text.is_null() || font_json.is_null() {
+        return 0.0;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    if text_str.is_empty() {
+        return 0.0;
+    }
+
+    let font_json_str = match CStr::from_ptr(font_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+
+    // Parse the font descriptor from JSON
+    let descriptor: FontDescriptor = match serde_json::from_str(font_json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to parse font descriptor JSON: {}", e);
+            return 0.0;
+        }
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return 0.0,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size for physical pixels
+    let scaled_descriptor = FontDescriptor {
+        source: descriptor.source,
+        weight: descriptor.weight,
+        style: descriptor.style,
+        size: descriptor.size * scale_factor,
+    };
+
+    // Use the WindowsGlyphRasterizer's measure_string which handles bundled fonts
+    let mut rasterizer = crate::text::atlas::WindowsGlyphRasterizer::new();
     let width = rasterizer.measure_string(text_str, &scaled_descriptor);
 
     // Convert back to logical pixels
@@ -6444,8 +7986,10 @@ pub extern "C" fn centered_audio_input_get_state(input_id: u32) -> i32 {
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_audio_input_get_level(input_id: u32) -> f32 {
-    let inputs = AUDIO_INPUTS.lock().unwrap();
-    if let Some(input) = inputs.get(&input_id) {
+    let mut inputs = AUDIO_INPUTS.lock().unwrap();
+    if let Some(input) = inputs.get_mut(&input_id) {
+        // Call update() to read samples from the microphone
+        input.update();
         input.level()
     } else {
         0.0
@@ -6698,11 +8242,13 @@ pub extern "C" fn centered_video_input_get_dimensions(input_id: u32, width_out: 
 /// - -4: Failed to upload to GPU
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
-pub extern "C" fn centered_video_input_get_frame_texture(input_id: u32, _existing_texture_id: u32) -> i32 {
-    // First get the latest frame
+pub extern "C" fn centered_video_input_get_frame_texture(input_id: u32, existing_texture_id: u32) -> i32 {
+    // First update the input to capture new frames, then get the latest frame
     let frame = {
-        let inputs = VIDEO_INPUTS.lock().unwrap();
-        if let Some(input) = inputs.get(&input_id) {
+        let mut inputs = VIDEO_INPUTS.lock().unwrap();
+        if let Some(input) = inputs.get_mut(&input_id) {
+            // Call update() to read frames from the camera
+            input.update();
             input.latest_frame()
         } else {
             return -2; // Input not found
@@ -6714,11 +8260,18 @@ pub extern "C" fn centered_video_input_get_frame_texture(input_id: u32, _existin
         None => return -3, // No frame available
     };
 
-    // Convert BGRA to RGBA for GPU upload
-    let mut rgba_data = frame.data.clone();
-    for chunk in rgba_data.chunks_exact_mut(4) {
-        chunk.swap(0, 2); // Swap B and R
-    }
+    // Only convert BGRA to RGBA if the frame is in BGRA format
+    // Windows camera already outputs RGBA from process_sample()
+    let rgba_data = if frame.pixel_format == crate::video::input::PixelFormat::BGRA {
+        let mut data = frame.data.clone();
+        for chunk in data.chunks_exact_mut(4) {
+            chunk.swap(0, 2); // Swap B and R
+        }
+        data
+    } else {
+        // Don't clone - take ownership directly
+        frame.data
+    };
 
     // Create LoadedImage for the backend
     let loaded_image = crate::image::LoadedImage {
@@ -6727,23 +8280,26 @@ pub extern "C" fn centered_video_input_get_frame_texture(input_id: u32, _existin
         data: rgba_data,
     };
 
-    // Get backend and upload
+    // Get backend and upload/update texture
     let mut backend_guard = get_backend().lock().unwrap();
     let backend = match backend_guard.as_mut() {
         Some(b) => b,
         None => return -1, // Backend not initialized
     };
 
-    // NOTE: We do NOT unload the existing texture here because it may still be referenced
-    // by render commands that were generated earlier in this frame. The caller (Go side)
-    // is responsible for unloading old textures AFTER the frame is rendered.
-    // This avoids a race condition where Video widget generates commands using textureID N,
-    // then Camera widget unloads N and creates N+1, causing "Texture N not found" errors.
-
-    // Upload new frame
-    match backend.load_image(&loaded_image) {
-        Ok(texture_id) => texture_id as i32,
-        Err(_) => -4, // Upload failed
+    // If we have an existing texture, try to update it in-place for better performance
+    // This avoids creating/destroying GPU textures every frame
+    if existing_texture_id > 0 {
+        match backend.update_texture(existing_texture_id, &loaded_image) {
+            Ok(texture_id) => texture_id as i32,
+            Err(_) => -4, // Upload failed
+        }
+    } else {
+        // First frame - create new texture
+        match backend.load_image(&loaded_image) {
+            Ok(texture_id) => texture_id as i32,
+            Err(_) => -4, // Upload failed
+        }
     }
 }
 
@@ -8538,7 +10094,104 @@ fn execute_single_command(cmd_type: u16, payload: &[u8]) -> (BatchResponseType, 
             match backend_lock.lock() {
                 Ok(mut guard) => {
                     if let Some(backend) = guard.as_mut() {
-                        match backend.render_frame(&commands) {
+                        // Handle frameless window rendering (Linux/Windows)
+                        #[cfg(any(target_os = "linux", target_os = "windows"))]
+                        let final_commands = {
+                            let mut all_commands = commands;
+
+                            // Check frameless state and add window controls
+                            if let Ok(state) = get_frameless_state().lock() {
+                                if !state.decorations && state.show_native_controls && !all_commands.is_empty() {
+                                    // Get window dimensions from backend (physical) and convert to logical
+                                    let scale = state.scale_factor as f32;
+                                    let logical_width = backend.get_width() as f32 / scale;
+                                    let logical_height = backend.get_height() as f32 / scale;
+
+                                    #[cfg(target_os = "linux")]
+                                    let window_radius = crate::platform::linux::WINDOW_CORNER_RADIUS;
+                                    #[cfg(target_os = "windows")]
+                                    let window_radius = crate::platform::windows::WINDOW_CORNER_RADIUS;
+
+                                    // Extract background color from Clear and replace with transparent
+                                    let mut bg_color: Option<crate::style::Color> = None;
+                                    for cmd in all_commands.iter_mut() {
+                                        if let RenderCommand::Clear(color) = cmd {
+                                            bg_color = Some(*color);
+                                            *color = crate::style::Color { r: 0, g: 0, b: 0, a: 0 };
+                                            break;
+                                        }
+                                    }
+
+                                    // Insert rounded corner clipping at the beginning (after Clear)
+                                    let rounded_clip = RenderCommand::PushRoundedClip {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: logical_width,
+                                        height: logical_height,
+                                        corner_radii: [window_radius, window_radius, window_radius, window_radius],
+                                    };
+
+                                    let insert_pos = all_commands.iter()
+                                        .position(|cmd| !matches!(cmd, RenderCommand::Clear(_)))
+                                        .unwrap_or(0);
+                                    all_commands.insert(insert_pos, rounded_clip);
+
+                                    // Draw background rect right after PushRoundedClip (inside stencil clip)
+                                    if let Some(color) = bg_color {
+                                        let bg_rect = RenderCommand::DrawRect {
+                                            x: 0.0,
+                                            y: 0.0,
+                                            width: logical_width,
+                                            height: logical_height,
+                                            color: ((color.r as u32) << 24) | ((color.g as u32) << 16) | ((color.b as u32) << 8) | (color.a as u32),
+                                            corner_radii: [0.0, 0.0, 0.0, 0.0],
+                                            rotation: 0.0,
+                                            border: None,
+                                            gradient: None,
+                                        };
+                                        all_commands.insert(insert_pos + 1, bg_rect);
+                                    }
+
+                                    // Add window controls (inside the clipped area)
+                                    if let Some(ref controls) = state.window_controls {
+                                        let control_commands = controls.to_render_commands(logical_width);
+                                        all_commands.extend(control_commands);
+                                    }
+
+                                    // End rounded corner clipping
+                                    all_commands.push(RenderCommand::PopClip {});
+
+                                    // Add window border
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        let is_dark = state.dark_mode ||
+                                            crate::platform::linux::is_dark_mode();
+                                        let border_cmd = crate::platform::linux::window_border_command(
+                                            logical_width,
+                                            logical_height,
+                                            is_dark,
+                                        );
+                                        all_commands.push(border_cmd);
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        let border_cmd = crate::platform::windows::window_border_command(
+                                            logical_width,
+                                            logical_height,
+                                            state.dark_mode,
+                                        );
+                                        all_commands.push(border_cmd);
+                                    }
+                                }
+                            }
+
+                            all_commands
+                        };
+
+                        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                        let final_commands = commands;
+
+                        match backend.render_frame(&final_commands) {
                             Ok(()) => (BatchResponseType::Success, vec![]),
                             Err(e) => (BatchResponseType::Error, format!("render error: {}", e).into_bytes()),
                         }

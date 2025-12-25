@@ -219,14 +219,92 @@ mod macos {
 mod windows {
     use super::WindowStyleOptions;
     use raw_window_handle::Win32WindowHandle;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE,
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    };
+    use windows::Win32::UI::Controls::MARGINS;
+
+    /// DWM window corner preference values
+    const DWMWCP_DEFAULT: i32 = 0;
+    const DWMWCP_DONOTROUND: i32 = 1;
+    const DWMWCP_ROUND: i32 = 2;
+    const DWMWCP_ROUNDSMALL: i32 = 3;
+
+    /// DWM system backdrop type values (Windows 11)
+    const DWMSBT_AUTO: i32 = 0;
+    const DWMSBT_NONE: i32 = 1;
+    const DWMSBT_MAINWINDOW: i32 = 2;  // Mica
+    const DWMSBT_TRANSIENTWINDOW: i32 = 3;  // Acrylic
+    const DWMSBT_TABBEDWINDOW: i32 = 4;  // Tabbed Mica
 
     pub fn apply_style(
-        _handle: Win32WindowHandle,
-        _options: WindowStyleOptions,
+        handle: Win32WindowHandle,
+        options: WindowStyleOptions,
     ) -> Result<(), String> {
-        // Windows 11+ supports DWM rounded corners via DwmSetWindowAttribute
-        // with DWMWA_WINDOW_CORNER_PREFERENCE
-        // For now, return Ok - can implement when we have Windows testing
-        Ok(())
+        unsafe {
+            let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+
+            // Apply rounded corners (Windows 11+)
+            if options.corner_radius > 0.0 {
+                // Choose corner style based on radius
+                let corner_preference = if options.corner_radius >= 8.0 {
+                    DWMWCP_ROUND // Standard rounded corners
+                } else {
+                    DWMWCP_ROUNDSMALL // Small rounded corners
+                };
+
+                let result = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &corner_preference as *const i32 as *const std::ffi::c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+
+                if result.is_err() {
+                    // Windows 10 doesn't support this - that's OK, silently continue
+                    eprintln!("Note: DWM rounded corners not supported (Windows 11+ required)");
+                }
+            }
+
+            // Apply Mica material backdrop (Windows 11+)
+            // This creates the frosted glass effect behind the window
+            let backdrop_type = DWMSBT_MAINWINDOW; // Mica
+            let result = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_SYSTEMBACKDROP_TYPE,
+                &backdrop_type as *const i32 as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+
+            if result.is_err() {
+                // Try the older USE_IMMERSIVE_DARK_MODE for dark title bar on Windows 10
+                let use_dark_mode: i32 = 1;
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE,
+                    &use_dark_mode as *const i32 as *const std::ffi::c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+            }
+
+            // For frameless windows, extend the frame into client area
+            if !options.show_native_controls {
+                let margins = MARGINS {
+                    cxLeftWidth: -1,
+                    cxRightWidth: -1,
+                    cyTopHeight: -1,
+                    cyBottomHeight: -1,
+                };
+
+                let result = DwmExtendFrameIntoClientArea(hwnd, &margins);
+                if result.is_err() {
+                    return Err("Failed to extend frame into client area".to_string());
+                }
+            }
+
+            Ok(())
+        }
     }
 }

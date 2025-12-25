@@ -1279,6 +1279,17 @@ func (w *Widget) SetTextureID(textureID uint32) *Widget {
 	return w
 }
 
+// SetTextureIDWithDimensions sets a texture ID and its natural dimensions for correct aspect ratio.
+// This is preferred over SetTextureID when the texture dimensions differ from the widget's natural dimensions.
+func (w *Widget) SetTextureIDWithDimensions(textureID uint32, width, height uint32) *Widget {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.videoTextureID = textureID
+	w.videoNaturalW = width
+	w.videoNaturalH = height
+	return w
+}
+
 // VideoState returns the current playback state (0=Idle, 1=Loading, 2=Playing, 3=Paused, 4=Ended, 5=Error).
 func (w *Widget) VideoState() int32 {
 	w.mu.RLock()

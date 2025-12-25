@@ -33,6 +33,12 @@ pub mod linux;
 #[cfg(target_os = "linux")]
 pub mod linux_input;
 
+// Windows uses Media Foundation for video decoding and camera capture
+#[cfg(target_os = "windows")]
+pub mod windows;
+#[cfg(target_os = "windows")]
+pub mod windows_input;
+
 use std::error::Error;
 use std::fmt;
 

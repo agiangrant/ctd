@@ -29,6 +29,10 @@ pub mod web;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+// Windows desktop integration (tray, notifications)
+#[cfg(target_os = "windows")]
+pub mod windows;
+
 // macOS native backend - kept for reference but not used (winit works fine on macOS)
 // Uncomment to use direct AppKit instead of winit
 // #[cfg(target_os = "macos")]

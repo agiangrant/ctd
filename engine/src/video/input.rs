@@ -218,8 +218,11 @@ pub struct VideoInput {
     #[cfg(target_os = "linux")]
     backend: super::linux_input::LinuxVideoInput,
 
+    #[cfg(target_os = "windows")]
+    backend: super::windows_input::WindowsVideoInput,
+
     // Placeholder for unsupported platforms
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
     _phantom: std::marker::PhantomData<()>,
 }
 
@@ -233,40 +236,42 @@ impl VideoInput {
             backend: super::android_input::AndroidVideoInput::new(),
             #[cfg(target_os = "linux")]
             backend: super::linux_input::LinuxVideoInput::new(),
-            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+            #[cfg(target_os = "windows")]
+            backend: super::windows_input::WindowsVideoInput::new(),
+            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Request camera permission
     pub fn request_permission(&mut self) -> Result<(), VideoInputError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.request_permission();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         Err(VideoInputError::UnsupportedPlatform)
     }
 
     /// Check if permission was granted
     pub fn has_permission(&self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.has_permission();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         false
     }
 
     /// List available video input devices
     pub fn list_devices(&self) -> Result<Vec<VideoInputDevice>, VideoInputError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.list_devices();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         Err(VideoInputError::UnsupportedPlatform)
     }
 
     /// Open a specific device (or default if None)
     pub fn open(&mut self, device_id: Option<&str>, config: &VideoInputConfig) -> Result<(), VideoInputError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.open(device_id, config);
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         {
             let _ = (device_id, config);
             Err(VideoInputError::UnsupportedPlatform)
@@ -275,56 +280,66 @@ impl VideoInput {
 
     /// Start capturing video
     pub fn start(&mut self) -> Result<(), VideoInputError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.start();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         Err(VideoInputError::UnsupportedPlatform)
     }
 
     /// Stop capturing video
     pub fn stop(&mut self) -> Result<(), VideoInputError> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.stop();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         Err(VideoInputError::UnsupportedPlatform)
     }
 
     /// Close the device
     pub fn close(&mut self) {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         self.backend.close();
     }
 
     /// Get current state
     pub fn state(&self) -> VideoInputState {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.state();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         VideoInputState::Idle
     }
 
     /// Get current frame dimensions
     pub fn dimensions(&self) -> Option<(u32, u32)> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.dimensions();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         None
     }
 
     /// Set callback for video frames
     pub fn set_frame_callback(&mut self, callback: Option<VideoFrameCallback>) {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         self.backend.set_frame_callback(callback);
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         let _ = callback;
     }
 
     /// Get the latest frame
     pub fn latest_frame(&self) -> Option<VideoFrame> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows"))]
         return self.backend.latest_frame();
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
         None
+    }
+
+    /// Update the video input - call periodically to pull frames from camera
+    /// This is needed on platforms that don't use callbacks (Windows, Linux)
+    pub fn update(&mut self) {
+        #[cfg(target_os = "windows")]
+        self.backend.update();
+        #[cfg(target_os = "linux")]
+        self.backend.update();
+        // macOS, iOS, Android use callbacks, no polling needed
     }
 }
 

@@ -35,6 +35,12 @@ pub mod linux;
 #[cfg(target_os = "linux")]
 pub mod linux_input;
 
+// Windows uses WASAPI for audio playback and input
+#[cfg(target_os = "windows")]
+pub mod windows;
+#[cfg(target_os = "windows")]
+pub mod windows_input;
+
 use std::error::Error;
 use std::fmt;
 

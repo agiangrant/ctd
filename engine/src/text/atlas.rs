@@ -30,6 +30,12 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxGlyphRasterizer;
 
+// Windows uses DirectWrite for glyph rasterization
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsGlyphRasterizer;
+
 /// Unique identifier for a glyph in the atlas
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
@@ -497,11 +503,14 @@ pub type PlatformGlyphRasterizer = AndroidGlyphRasterizer;
 #[cfg(target_os = "linux")]
 pub type PlatformGlyphRasterizer = LinuxGlyphRasterizer;
 
-// Stub rasterizer for unsupported platforms (Windows, Web, etc.)
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+pub type PlatformGlyphRasterizer = WindowsGlyphRasterizer;
+
+// Stub rasterizer for unsupported platforms (Web, etc.)
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
 pub use stub::StubGlyphRasterizer as PlatformGlyphRasterizer;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android", target_os = "linux", target_os = "windows")))]
 mod stub {
     use super::*;
     use crate::text::FontDescriptor;

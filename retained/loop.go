@@ -2493,6 +2493,24 @@ func (l *Loop) renderVideo(commands []ffi.RenderCommand, w *Widget, x, y, width,
 		l.loadVideoAsync(w, source, autoplay, loop, muted, volume)
 	}
 
+	// If texture is set directly (e.g., from Camera widget), update natural dimensions
+	// to match the actual texture dimensions for correct aspect ratio.
+	// This is needed when VideoStream is created with placeholder dimensions.
+	if textureID != 0 && playerID == 0 {
+		// No video player - texture was set directly (e.g., from camera)
+		if texW, texH, err := ffi.GetTextureSize(ffi.TextureID(textureID)); err == nil && texW > 0 && texH > 0 {
+			// Update if dimensions differ from current
+			if naturalW != texW || naturalH != texH {
+				w.mu.Lock()
+				w.videoNaturalW = texW
+				w.videoNaturalH = texH
+				naturalW = texW
+				naturalH = texH
+				w.mu.Unlock()
+			}
+		}
+	}
+
 	// If player exists, update it to get new frames
 	if playerID != 0 {
 		// Update player (decodes frames as needed)
@@ -3027,10 +3045,13 @@ func (l *Loop) updateCamera(w *Widget) {
 
 	// Get latest camera frame and upload to GPU texture when capturing
 	if newState == ffi.VideoInputStateCapturing {
-		// Note: We pass 0 for existing_texture_id because the old texture may still
-		// be referenced by render commands generated earlier in this frame.
-		// We handle cleanup of old textures after rendering is complete.
-		newTextureID, err := ffi.VideoInputGetFrameTexture(ffi.VideoInputID(inputID), 0)
+		// Pass existing texture ID for in-place update (much faster than creating new textures)
+		// The Rust side will update the texture data directly if dimensions match
+		w.mu.RLock()
+		existingTextureID := w.camTextureID
+		w.mu.RUnlock()
+
+		newTextureID, err := ffi.VideoInputGetFrameTexture(ffi.VideoInputID(inputID), existingTextureID)
 		if err == nil && newTextureID != 0 {
 			w.mu.Lock()
 			oldTextureID := w.camTextureID
@@ -3038,13 +3059,13 @@ func (l *Loop) updateCamera(w *Widget) {
 			onFrame := w.onCamFrame
 			w.mu.Unlock()
 
-			// Queue old texture for deferred unload (after frame is rendered)
+			// Only queue for unload if texture ID actually changed (dimensions changed)
 			if oldTextureID != 0 && oldTextureID != newTextureID {
 				l.pendingTextureUnloads = append(l.pendingTextureUnloads, oldTextureID)
 			}
 
-			// Fire frame callback if texture changed (new frame available)
-			if newTextureID != oldTextureID && onFrame != nil {
+			// Fire frame callback
+			if onFrame != nil {
 				onFrame(newTextureID)
 			}
 		}
