@@ -103,6 +103,7 @@ fontconfig = "0.10"           # fontconfig bindings for system font discovery
 arboard = "3"                 # Clipboard (X11 + Wayland)
 rfd = "0.15"                  # Native file dialogs
 tray-icon = { version = "0.19", default-features = false }  # System tray icons (no libxdo)
+gtk = "0.18"                  # GTK for tray icon menus (required by muda/tray-icon)
 notify-rust = "4"             # Desktop notifications
 zbus = { version = "4", default-features = false, features = ["tokio"] }  # D-Bus for XDG portals
 tokio = { version = "1", features = ["rt-multi-thread"] }  # Async runtime for zbus

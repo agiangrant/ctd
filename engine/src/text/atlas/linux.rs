@@ -49,12 +49,24 @@ struct FontCacheKey {
     size_px: u32,
 }
 
+/// Cache key for font path lookups (avoids repeated fontconfig queries)
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct FontPathCacheKey {
+    family: String,
+    weight: u16,
+    italic: bool,
+}
+
 /// Linux glyph rasterizer using FreeType
 pub struct LinuxGlyphRasterizer {
     /// FreeType library handle
     library: Library,
     /// Cache of loaded faces (path+size -> Face)
     face_cache: HashMap<FontCacheKey, freetype::Face>,
+    /// Cache of font paths (family+weight+italic -> path) to avoid fontconfig lookups
+    font_path_cache: HashMap<FontPathCacheKey, Option<String>>,
+    /// Cache of resolved bundled font paths
+    bundled_path_cache: HashMap<String, Option<String>>,
 }
 
 impl LinuxGlyphRasterizer {
@@ -63,6 +75,8 @@ impl LinuxGlyphRasterizer {
         Self {
             library,
             face_cache: HashMap::new(),
+            font_path_cache: HashMap::new(),
+            bundled_path_cache: HashMap::new(),
         }
     }
 
@@ -118,73 +132,73 @@ impl LinuxGlyphRasterizer {
 
     /// Load a FreeType face from a file path at the given size
     fn load_face(&mut self, path: &str, size_px: f32) -> Option<&freetype::Face> {
+        use std::collections::hash_map::Entry;
+
         let cache_key = FontCacheKey {
             path: path.to_string(),
             size_px: size_px.round() as u32,
         };
 
-        // Check if already cached
-        if self.face_cache.contains_key(&cache_key) {
-            return self.face_cache.get(&cache_key);
-        }
+        // Use entry API for single lookup
+        match self.face_cache.entry(cache_key) {
+            Entry::Occupied(entry) => Some(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                // Load the face
+                let face = match self.library.new_face(path, 0) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("Failed to load font '{}': {:?}", path, e);
+                        return None;
+                    }
+                };
 
-        // Load the face
-        let face = match self.library.new_face(path, 0) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to load font '{}': {:?}", path, e);
-                return None;
+                // Set character size (FreeType uses 26.6 fixed-point, so multiply by 64)
+                // Set DPI to 72 so that point size equals pixel size
+                if let Err(e) = face.set_char_size(0, (size_px * 64.0) as isize, 72, 72) {
+                    eprintln!("Failed to set font size: {:?}", e);
+                    return None;
+                }
+
+                Some(entry.insert(face))
             }
-        };
-
-        // Set character size (FreeType uses 26.6 fixed-point, so multiply by 64)
-        // Set DPI to 72 so that point size equals pixel size
-        if let Err(e) = face.set_char_size(0, (size_px * 64.0) as isize, 72, 72) {
-            eprintln!("Failed to set font size: {:?}", e);
-            return None;
         }
-
-        self.face_cache.insert(cache_key.clone(), face);
-        self.face_cache.get(&cache_key)
     }
 
-    /// Get the font file path from a FontDescriptor
-    fn get_font_path(&self, font: &FontDescriptor) -> Option<String> {
+    /// Get the font file path from a FontDescriptor (with caching)
+    fn get_font_path(&mut self, font: &FontDescriptor) -> Option<String> {
         match &font.source {
             FontSource::System(name) => {
-                Self::find_font_path(name, font.weight, font.style == FontStyle::Italic)
-                    .map(|p| p.to_string_lossy().to_string())
+                let cache_key = FontPathCacheKey {
+                    family: name.clone(),
+                    weight: font.weight,
+                    italic: font.style == FontStyle::Italic,
+                };
+
+                // Check cache first
+                if let Some(cached) = self.font_path_cache.get(&cache_key) {
+                    return cached.clone();
+                }
+
+                // Not cached - do fontconfig lookup
+                let result = Self::find_font_path(name, font.weight, font.style == FontStyle::Italic)
+                    .map(|p| p.to_string_lossy().to_string());
+
+                // Cache the result (even if None, to avoid repeated failed lookups)
+                self.font_path_cache.insert(cache_key, result.clone());
+                result
             }
             FontSource::Bundled(path) => {
-                // Check if path exists
-                if std::path::Path::new(path).exists() {
-                    Some(path.clone())
-                } else {
-                    // Try relative to current directory
-                    let cwd_path = std::env::current_dir()
-                        .ok()
-                        .map(|cwd| cwd.join(path));
-
-                    if let Some(p) = cwd_path {
-                        if p.exists() {
-                            return Some(p.to_string_lossy().to_string());
-                        }
-                    }
-
-                    // Try relative to executable
-                    let exe_path = std::env::current_exe()
-                        .ok()
-                        .and_then(|exe| exe.parent().map(|p| p.join(path)));
-
-                    if let Some(p) = exe_path {
-                        if p.exists() {
-                            return Some(p.to_string_lossy().to_string());
-                        }
-                    }
-
-                    eprintln!("Font file not found: {}", path);
-                    None
+                // Check cache first
+                if let Some(cached) = self.bundled_path_cache.get(path) {
+                    return cached.clone();
                 }
+
+                // Not cached - resolve the path
+                let result = Self::resolve_bundled_path(path);
+
+                // Cache the result
+                self.bundled_path_cache.insert(path.clone(), result.clone());
+                result
             }
             FontSource::Memory { .. } => {
                 // Memory fonts not yet supported in Linux rasterizer
@@ -192,6 +206,35 @@ impl LinuxGlyphRasterizer {
                 None
             }
         }
+    }
+
+    /// Resolve a bundled font path (checks multiple locations)
+    fn resolve_bundled_path(path: &str) -> Option<String> {
+        // Check if path exists as-is
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+
+        // Try relative to current directory
+        if let Ok(cwd) = std::env::current_dir() {
+            let cwd_path = cwd.join(path);
+            if cwd_path.exists() {
+                return Some(cwd_path.to_string_lossy().to_string());
+            }
+        }
+
+        // Try relative to executable
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let exe_path = exe_dir.join(path);
+                if exe_path.exists() {
+                    return Some(exe_path.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        eprintln!("Font file not found: {}", path);
+        None
     }
 
     /// Measure the width of a string
@@ -220,6 +263,30 @@ impl LinuxGlyphRasterizer {
             }
         }
         width
+    }
+
+    /// Get font metrics (ascent, descent) for a font descriptor
+    /// Returns (ascent, descent) in pixels, or (0.0, 0.0) on error
+    pub fn get_font_metrics(&mut self, font: &FontDescriptor) -> (f32, f32) {
+        let font_path = match self.get_font_path(font) {
+            Some(p) => p,
+            None => return (0.0, 0.0),
+        };
+
+        let face = match self.load_face(&font_path, font.size) {
+            Some(f) => f,
+            None => return (0.0, 0.0),
+        };
+
+        // Get metrics from size_metrics (values are in 26.6 fixed-point format)
+        if let Some(size_metrics) = face.size_metrics() {
+            let ascent = size_metrics.ascender as f32 / 64.0;
+            let descent = (size_metrics.descender.abs()) as f32 / 64.0;
+            (ascent, descent)
+        } else {
+            // Fallback for bitmap fonts
+            (font.size * 0.8, font.size * 0.2)
+        }
     }
 }
 

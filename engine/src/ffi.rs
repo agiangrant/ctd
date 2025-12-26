@@ -1915,6 +1915,17 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
         }
+
+        // Linux: Process GTK events and tray icon menu events
+        #[cfg(target_os = "linux")]
+        {
+            // Pump GTK events to allow tray icon to appear and respond
+            while gtk::events_pending() {
+                gtk::main_iteration();
+            }
+            tray_icon::process_events();
+        }
+
         // Reset to Wait by default, will be updated by event handlers
         event_loop.set_control_flow(ControlFlow::Wait);
     }
@@ -2358,39 +2369,33 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 self.call_callback(&event);
 
-                // Linux: update maximize button state after resize
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(ref mut controls) = self.window_controls {
-                        if let Some(ref window) = self.window {
-                            controls.maximize_state.maximized = window.is_maximized();
-                            // Sync to global frameless state for batch rendering
-                            if let Ok(mut state) = get_frameless_state().lock() {
-                                state.window_controls = Some(controls.clone());
-                            }
-                        }
-                    }
-                }
-
-                // Windows: update maximize button state after resize
-                #[cfg(target_os = "windows")]
-                {
-                    if let Some(ref mut controls) = self.window_controls {
-                        if let Some(ref window) = self.window {
-                            controls.maximize_state.maximized = window.is_maximized();
-                            // Sync to global frameless state for batch rendering
-                            if let Ok(mut state) = get_frameless_state().lock() {
-                                state.window_controls = Some(controls.clone());
-                            }
-                        }
-                    }
-                }
-
-                // Update scale factor in frameless state for batch rendering
+                // Linux/Windows: update frameless state in a single lock acquisition
                 #[cfg(any(target_os = "linux", target_os = "windows"))]
                 {
                     if let Ok(mut state) = get_frameless_state().lock() {
+                        // Update scale factor
                         state.scale_factor = scale_factor;
+
+                        // Update maximize button state if we have window controls
+                        #[cfg(target_os = "linux")]
+                        {
+                            if let Some(ref mut controls) = self.window_controls {
+                                if let Some(ref window) = self.window {
+                                    controls.maximize_state.maximized = window.is_maximized();
+                                    state.window_controls = Some(controls.clone());
+                                }
+                            }
+                        }
+
+                        #[cfg(target_os = "windows")]
+                        {
+                            if let Some(ref mut controls) = self.window_controls {
+                                if let Some(ref window) = self.window {
+                                    controls.maximize_state.maximized = window.is_maximized();
+                                    state.window_controls = Some(controls.clone());
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -3755,6 +3760,16 @@ unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
 /// Desktop app runner using winit
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 unsafe fn run_winit_app(config: &AppConfig, callback: AppCallback) -> i32 {
+    // Initialize GTK on Linux (required for tray icon menus)
+    // Must be done on main thread before any GTK widgets are created
+    #[cfg(target_os = "linux")]
+    {
+        match gtk::init() {
+            Ok(()) => eprintln!("[Rust] GTK initialized successfully"),
+            Err(e) => eprintln!("[Rust] Warning: Failed to initialize GTK: {}", e),
+        }
+    }
+
     // Create event loop with custom user event type for cross-thread signaling
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(el) => el,
@@ -4407,7 +4422,32 @@ pub extern "C" fn centered_clipboard_get() -> *const c_char {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        use crate::platform::linux::LinuxClipboard;
+
+        match LinuxClipboard::new() {
+            Ok(mut clipboard) => {
+                if let Some(text) = clipboard.get_text() {
+                    match CString::new(text) {
+                        Ok(cstring) => {
+                            let ptr = cstring.as_ptr();
+                            if let Ok(mut guard) = CLIPBOARD_STRING.lock() {
+                                *guard = Some(cstring);
+                            }
+                            ptr
+                        }
+                        Err(_) => ptr::null(),
+                    }
+                } else {
+                    ptr::null()
+                }
+            }
+            Err(_) => ptr::null(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "linux")))]
     {
         ptr::null()
     }
@@ -4516,7 +4556,16 @@ pub unsafe extern "C" fn centered_clipboard_set(text: *const c_char) {
         let _ = CloseClipboard();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        use crate::platform::linux::LinuxClipboard;
+
+        if let Ok(mut clipboard) = LinuxClipboard::new() {
+            let _ = clipboard.set_text(text_str);
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "linux")))]
     {
         let _ = text_str; // Suppress unused variable warning
     }
@@ -4853,7 +4902,85 @@ pub unsafe extern "C" fn centered_file_dialog_open(
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        use rfd::FileDialog;
+
+        eprintln!("[Rust] centered_file_dialog_open called");
+
+        // Parse parameters
+        let title_str = if title.is_null() {
+            "Open File"
+        } else {
+            match CStr::from_ptr(title).to_str() {
+                Ok(s) if !s.is_empty() => s,
+                _ => "Open File",
+            }
+        };
+
+        let directory_str = if directory.is_null() {
+            None
+        } else {
+            CStr::from_ptr(directory).to_str().ok().filter(|s| !s.is_empty())
+        };
+
+        let filters_str = if filters.is_null() {
+            None
+        } else {
+            CStr::from_ptr(filters).to_str().ok().filter(|s| !s.is_empty())
+        };
+
+        let allow_multiple = multiple != 0;
+
+        eprintln!("[Rust] File dialog: title='{}', multiple={}", title_str, allow_multiple);
+
+        // Build dialog
+        let mut dialog = FileDialog::new().set_title(title_str);
+
+        if let Some(dir) = directory_str {
+            dialog = dialog.set_directory(dir);
+        }
+
+        // Parse comma-separated extensions
+        if let Some(f) = filters_str {
+            let exts: Vec<&str> = f.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if !exts.is_empty() {
+                dialog = dialog.add_filter("Files", &exts);
+            }
+        }
+
+        eprintln!("[Rust] Showing file dialog...");
+
+        // Show dialog
+        let paths = if allow_multiple {
+            dialog.pick_files()
+        } else {
+            dialog.pick_file().map(|p| vec![p])
+        };
+
+        eprintln!("[Rust] File dialog returned: {:?}", paths.is_some());
+
+        match paths {
+            Some(paths) => {
+                let path_strings: Vec<String> = paths.iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
+
+                match serde_json::to_string(&path_strings) {
+                    Ok(json) => {
+                        match CString::new(json) {
+                            Ok(cstring) => cstring.into_raw(),
+                            Err(_) => ptr::null_mut(),
+                        }
+                    }
+                    Err(_) => ptr::null_mut(),
+                }
+            }
+            None => ptr::null_mut(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (title, directory, filters, multiple);
         ptr::null_mut()
@@ -4962,7 +5089,61 @@ pub unsafe extern "C" fn centered_file_dialog_save(
         ptr::null_mut()
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        use rfd::FileDialog;
+
+        // Parse parameters
+        let title_str = if title.is_null() {
+            "Save File"
+        } else {
+            match CStr::from_ptr(title).to_str() {
+                Ok(s) if !s.is_empty() => s,
+                _ => "Save File",
+            }
+        };
+
+        let directory_str = if directory.is_null() {
+            None
+        } else {
+            CStr::from_ptr(directory).to_str().ok().filter(|s| !s.is_empty())
+        };
+
+        let filters_str = if filters.is_null() {
+            None
+        } else {
+            CStr::from_ptr(filters).to_str().ok().filter(|s| !s.is_empty())
+        };
+
+        // Build dialog
+        let mut dialog = FileDialog::new().set_title(title_str);
+
+        if let Some(dir) = directory_str {
+            dialog = dialog.set_directory(dir);
+        }
+
+        // Parse comma-separated extensions
+        if let Some(f) = filters_str {
+            let exts: Vec<&str> = f.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if !exts.is_empty() {
+                dialog = dialog.add_filter("Files", &exts);
+            }
+        }
+
+        // Show dialog
+        match dialog.save_file() {
+            Some(path) => {
+                let path_str = path.to_string_lossy().to_string();
+                match CString::new(path_str) {
+                    Ok(cstring) => cstring.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                }
+            }
+            None => ptr::null_mut(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (title, directory, filters);
         ptr::null_mut()
@@ -6194,19 +6375,484 @@ mod tray_icon {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod tray_icon {
+    use std::sync::Mutex;
+    use std::os::raw::c_char;
+    use std::ffi::CStr;
+    use tray_icon::menu::{Menu, MenuItem, MenuId};
+
+    /// Menu item info for tracking
+    struct MenuItemInfo {
+        id: MenuId,
+        item: MenuItem,
+    }
+
+    /// Tray icon state
+    struct TrayState {
+        tray: Option<tray_icon::TrayIcon>,
+        menu: Option<Menu>,
+        menu_items: Vec<MenuItemInfo>,
+        visible: bool,
+        callback: Option<extern "C" fn(i32)>,
+    }
+
+    unsafe impl Send for TrayState {}
+
+    impl Default for TrayState {
+        fn default() -> Self {
+            Self {
+                tray: None,
+                menu: None,
+                menu_items: Vec::new(),
+                visible: true,
+                callback: None,
+            }
+        }
+    }
+
+    static TRAY_STATE: Mutex<Option<TrayState>> = Mutex::new(None);
+
+    /// Create the tray icon
+    /// Note: GTK must be initialized before calling this (done in run_winit_app)
+    pub fn create() -> i32 {
+        eprintln!("[Rust] tray_icon::create() called");
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[Rust] Failed to lock TRAY_STATE: {:?}", e);
+                return -1;
+            }
+        };
+
+        if guard.is_some() {
+            eprintln!("[Rust] Tray icon already created");
+            return 1; // Already created
+        }
+
+        // Create a default icon - many Linux DEs won't show tray icons without one
+        eprintln!("[Rust] Creating default icon...");
+        let default_icon = match create_default_icon() {
+            Some(icon) => {
+                eprintln!("[Rust] Default icon created successfully");
+                icon
+            },
+            None => {
+                eprintln!("[Rust] Failed to create default tray icon");
+                return -3;
+            }
+        };
+
+        // Create a basic tray icon with default icon
+        eprintln!("[Rust] Building tray icon...");
+        let tray = match tray_icon::TrayIconBuilder::new()
+            .with_tooltip("App")
+            .with_icon(default_icon)
+            .build()
+        {
+            Ok(t) => {
+                eprintln!("[Rust] Tray icon built successfully");
+                t
+            },
+            Err(e) => {
+                eprintln!("[Rust] Failed to create tray icon: {}", e);
+                return -2;
+            }
+        };
+
+        *guard = Some(TrayState {
+            tray: Some(tray),
+            menu: None,
+            menu_items: Vec::new(),
+            visible: true,
+            callback: None,
+        });
+
+        eprintln!("[Rust] Tray icon creation complete");
+        0
+    }
+
+    /// Destroy the tray icon
+    pub fn destroy() {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        // Just drop the state - TrayIcon will clean up on drop
+        *guard = None;
+    }
+
+    /// Set icon from file path
+    pub unsafe fn set_icon_file(path: *const c_char) -> i32 {
+        if path.is_null() {
+            return -3;
+        }
+
+        let path_str = match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => return -3,
+        };
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return -1,
+        };
+
+        let tray = match state.tray.as_ref() {
+            Some(t) => t,
+            None => return -1,
+        };
+
+        // Load image and convert to icon
+        let img = match image::open(path_str) {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+
+        let icon = match tray_icon::Icon::from_rgba(rgba.into_raw(), width, height) {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        if tray.set_icon(Some(icon)).is_err() {
+            return -4;
+        }
+
+        0
+    }
+
+    /// Set icon from raw data (PNG encoded)
+    pub unsafe fn set_icon_data(data: *const u8, length: usize) -> i32 {
+        if data.is_null() || length == 0 {
+            return -3;
+        }
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return -1,
+        };
+
+        let tray = match state.tray.as_ref() {
+            Some(t) => t,
+            None => return -1,
+        };
+
+        // Load image from bytes
+        let bytes = std::slice::from_raw_parts(data, length);
+        let img = match image::load_from_memory(bytes) {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+
+        let icon = match tray_icon::Icon::from_rgba(rgba.into_raw(), width, height) {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        if tray.set_icon(Some(icon)).is_err() {
+            return -4;
+        }
+
+        0
+    }
+
+    /// Set tooltip
+    pub unsafe fn set_tooltip(tooltip: *const c_char) {
+        if tooltip.is_null() {
+            return;
+        }
+
+        let tooltip_str = match CStr::from_ptr(tooltip).to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(tray) = &state.tray {
+            let _ = tray.set_tooltip(Some(tooltip_str));
+        }
+    }
+
+    /// Set title (Linux tray icons don't typically show titles, but we'll use tooltip)
+    pub unsafe fn set_title(title: *const c_char) {
+        // On Linux, we use the tooltip for the title
+        set_tooltip(title);
+    }
+
+    /// Clear menu
+    pub fn clear_menu() {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        state.menu = None;
+        state.menu_items.clear();
+
+        if let Some(tray) = &state.tray {
+            tray.set_menu(None);
+        }
+    }
+
+    /// Add menu item
+    pub unsafe fn add_menu_item(
+        label: *const c_char,
+        enabled: i32,
+        _checked: i32,
+        is_separator: i32,
+    ) -> i32 {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return -1,
+        };
+
+        // Create menu if it doesn't exist
+        if state.menu.is_none() {
+            state.menu = Some(Menu::new());
+        }
+
+        let menu = state.menu.as_ref().unwrap();
+        let index = state.menu_items.len() as i32;
+
+        if is_separator != 0 {
+            use tray_icon::menu::PredefinedMenuItem;
+            let _ = menu.append(&PredefinedMenuItem::separator());
+        } else {
+            let label_str = if label.is_null() {
+                ""
+            } else {
+                match CStr::from_ptr(label).to_str() {
+                    Ok(s) => s,
+                    Err(_) => "",
+                }
+            };
+
+            let item = MenuItem::with_id(index as u32, label_str, enabled != 0, None);
+            let id = item.id().clone();
+            let _ = menu.append(&item);
+            state.menu_items.push(MenuItemInfo { id, item });
+        }
+
+        // Update tray menu
+        if let Some(tray) = &state.tray {
+            if let Some(menu) = &state.menu {
+                tray.set_menu(Some(Box::new(menu.clone())));
+            }
+        }
+
+        index
+    }
+
+    /// Set menu item enabled state
+    pub fn set_menu_item_enabled(index: i32, enabled: i32) {
+        let guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(info) = state.menu_items.get(index as usize) {
+            info.item.set_enabled(enabled != 0);
+        }
+    }
+
+    /// Set menu item checked state (not well supported on Linux)
+    pub fn set_menu_item_checked(_index: i32, _checked: i32) {
+        // Linux tray menus don't typically support checkmarks in the same way
+        // This is a no-op for now
+    }
+
+    /// Set menu item label
+    pub unsafe fn set_menu_item_label(index: i32, label: *const c_char) {
+        if label.is_null() {
+            return;
+        }
+
+        let label_str = match CStr::from_ptr(label).to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let state = match guard.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        if let Some(info) = state.menu_items.get(index as usize) {
+            info.item.set_text(label_str);
+        }
+    }
+
+    /// Set visibility
+    pub fn set_visible(visible: i32) {
+        eprintln!("[Rust] tray_icon::set_visible({}) called", visible);
+
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                eprintln!("[Rust] Failed to lock TRAY_STATE in set_visible");
+                return;
+            }
+        };
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => {
+                eprintln!("[Rust] No tray state in set_visible");
+                return;
+            }
+        };
+
+        state.visible = visible != 0;
+        eprintln!("[Rust] Setting tray visible to: {}", state.visible);
+
+        if let Some(tray) = &state.tray {
+            match tray.set_visible(state.visible) {
+                Ok(()) => eprintln!("[Rust] Tray set_visible succeeded"),
+                Err(e) => eprintln!("[Rust] Tray set_visible failed: {:?}", e),
+            }
+        } else {
+            eprintln!("[Rust] No tray icon in state");
+        }
+    }
+
+    /// Get visibility
+    pub fn is_visible() -> i32 {
+        let guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+
+        match guard.as_ref() {
+            Some(state) => if state.visible { 1 } else { 0 },
+            None => 0,
+        }
+    }
+
+    /// Set callback
+    pub fn set_callback(callback: extern "C" fn(i32)) {
+        let mut guard = match TRAY_STATE.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        if let Some(state) = guard.as_mut() {
+            state.callback = Some(callback);
+        }
+    }
+
+    /// Process pending menu events
+    /// Should be called from the event loop to handle menu item clicks
+    pub fn process_events() {
+        use tray_icon::menu::MenuEvent;
+
+        // Try to receive all pending menu events
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            // Find the menu item index that was clicked
+            let guard = match TRAY_STATE.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+
+            if let Some(state) = guard.as_ref() {
+                // Find the index of the clicked menu item
+                for (index, item_info) in state.menu_items.iter().enumerate() {
+                    if item_info.id == event.id {
+                        // Call the callback with the index
+                        if let Some(callback) = state.callback {
+                            drop(guard); // Release lock before calling callback
+                            callback(index as i32);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Create a simple default icon (22x22 blue circle)
+    fn create_default_icon() -> Option<tray_icon::Icon> {
+        // Create a 22x22 icon with a blue circle (common Linux tray icon size)
+        let size = 22u32;
+        let center = size as f32 / 2.0;
+        let radius = (size as f32 / 2.0) - 1.0;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f32 - center;
+                let dy = y as f32 - center;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                if dist <= radius {
+                    // Blue color inside circle
+                    rgba.extend_from_slice(&[59, 130, 246, 255]); // Tailwind blue-500
+                } else {
+                    // Transparent outside circle
+                    rgba.extend_from_slice(&[0, 0, 0, 0]);
+                }
+            }
+        }
+
+        tray_icon::Icon::from_rgba(rgba, size, size).ok()
+    }
+}
+
 /// Create a system tray icon
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_create() -> i32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::create()
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::create()
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         -1
     }
@@ -6216,11 +6862,7 @@ pub extern "C" fn centered_tray_icon_create() -> i32 {
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_destroy() {
-    #[cfg(target_os = "macos")]
-    {
-        tray_icon::destroy();
-    }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::destroy();
     }
@@ -6230,15 +6872,11 @@ pub extern "C" fn centered_tray_icon_destroy() {
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_icon_file(path: *const c_char) -> i32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_icon_file(path)
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_icon_file(path)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = path;
         -1
@@ -6249,15 +6887,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_icon_file(path: *const c_char) -
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_icon_data(data: *const u8, length: u64) -> i32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_icon_data(data, length as usize)
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_icon_data(data, length as usize)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (data, length);
         -1
@@ -6268,15 +6902,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_icon_data(data: *const u8, lengt
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_tooltip(tooltip: *const c_char) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_tooltip(tooltip);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_tooltip(tooltip);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = tooltip;
     }
@@ -6286,15 +6916,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_tooltip(tooltip: *const c_char) 
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_title(title: *const c_char) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_title(title);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_title(title);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = title;
     }
@@ -6304,11 +6930,7 @@ pub unsafe extern "C" fn centered_tray_icon_set_title(title: *const c_char) {
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_clear_menu() {
-    #[cfg(target_os = "macos")]
-    {
-        tray_icon::clear_menu();
-    }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::clear_menu();
     }
@@ -6323,15 +6945,11 @@ pub unsafe extern "C" fn centered_tray_icon_add_menu_item(
     checked: i32,
     is_separator: i32,
 ) -> i32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::add_menu_item(label, enabled, checked, is_separator)
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::add_menu_item(label, enabled, checked, is_separator)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (label, enabled, checked, is_separator);
         -1
@@ -6342,15 +6960,11 @@ pub unsafe extern "C" fn centered_tray_icon_add_menu_item(
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_menu_item_enabled(index: i32, enabled: i32) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_menu_item_enabled(index, enabled);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_menu_item_enabled(index, enabled);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (index, enabled);
     }
@@ -6360,15 +6974,11 @@ pub extern "C" fn centered_tray_icon_set_menu_item_enabled(index: i32, enabled: 
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_menu_item_checked(index: i32, checked: i32) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_menu_item_checked(index, checked);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_menu_item_checked(index, checked);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (index, checked);
     }
@@ -6378,15 +6988,11 @@ pub extern "C" fn centered_tray_icon_set_menu_item_checked(index: i32, checked: 
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn centered_tray_icon_set_menu_item_label(index: i32, label: *const c_char) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_menu_item_label(index, label);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_menu_item_label(index, label);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (index, label);
     }
@@ -6396,15 +7002,11 @@ pub unsafe extern "C" fn centered_tray_icon_set_menu_item_label(index: i32, labe
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_visible(visible: i32) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_visible(visible);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_visible(visible);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = visible;
     }
@@ -6414,15 +7016,11 @@ pub extern "C" fn centered_tray_icon_set_visible(visible: i32) {
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_is_visible() -> i32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::is_visible()
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::is_visible()
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         0
     }
@@ -6432,15 +7030,11 @@ pub extern "C" fn centered_tray_icon_is_visible() -> i32 {
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn centered_tray_icon_set_callback(callback: extern "C" fn(i32)) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         tray_icon::set_callback(callback);
     }
-    #[cfg(target_os = "windows")]
-    {
-        tray_icon::set_callback(callback);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = callback;
     }
@@ -7178,6 +7772,16 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
 }
 
 // Linux implementations for text measurement using FreeType
+
+/// Global Linux glyph rasterizer for FFI text measurement (preserves font caches across calls)
+#[cfg(target_os = "linux")]
+static LINUX_RASTERIZER: OnceLock<Mutex<crate::text::atlas::LinuxGlyphRasterizer>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn get_linux_rasterizer() -> &'static Mutex<crate::text::atlas::LinuxGlyphRasterizer> {
+    LINUX_RASTERIZER.get_or_init(|| Mutex::new(crate::text::atlas::LinuxGlyphRasterizer::new()))
+}
+
 #[cfg(target_os = "linux")]
 #[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
@@ -7225,8 +7829,12 @@ pub unsafe extern "C" fn centered_measure_text_to_cursor(
     // Scale font size just like rendering does
     let scaled_font_size = font_size * scale_factor;
 
-    // Use LinuxGlyphRasterizer to measure the string
-    let mut rasterizer = crate::text::atlas::LinuxGlyphRasterizer::new();
+    // Use global LinuxGlyphRasterizer (preserves font caches across calls)
+    let rasterizer = get_linux_rasterizer();
+    let mut rasterizer = match rasterizer.lock() {
+        Ok(r) => r,
+        Err(_) => return 0.0,
+    };
     let descriptor = FontDescriptor::system(font_name_str, 400, FontStyle::Normal, scaled_font_size);
 
     // Measure the whole substring at once
@@ -7292,12 +7900,127 @@ pub unsafe extern "C" fn centered_measure_text_with_font(
         size: descriptor.size * scale_factor,
     };
 
-    // Use the LinuxGlyphRasterizer's measure_string which handles bundled fonts
-    let mut rasterizer = crate::text::atlas::LinuxGlyphRasterizer::new();
+    // Use global LinuxGlyphRasterizer (preserves font caches across calls)
+    let rasterizer = get_linux_rasterizer();
+    let mut rasterizer = match rasterizer.lock() {
+        Ok(r) => r,
+        Err(_) => return 0.0,
+    };
     let width = rasterizer.measure_string(text_str, &scaled_descriptor);
 
     // Convert back to logical pixels
     width / scale_factor
+}
+
+/// Linux implementation: Measure text with font and return metrics
+///
+/// # Safety
+/// - text must be a valid null-terminated UTF-8 string
+/// - font_json must be a valid null-terminated UTF-8 JSON string
+#[cfg(target_os = "linux")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_metrics_with_font(
+    text: *const c_char,
+    font_json: *const c_char,
+) -> TextMeasurement {
+    let error_result = TextMeasurement {
+        width: 0.0,
+        height: 0.0,
+        ascent: 0.0,
+        descent: 0.0,
+    };
+
+    if text.is_null() || font_json.is_null() {
+        return error_result;
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return error_result,
+    };
+
+    let font_json_str = match CStr::from_ptr(font_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return error_result,
+    };
+
+    // Parse the font descriptor from JSON
+    let descriptor: FontDescriptor = match serde_json::from_str(font_json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to parse font descriptor JSON: {}", e);
+            return error_result;
+        }
+    };
+
+    // Get scale factor from backend
+    let scale_factor = {
+        let backend_lock = get_backend();
+        let guard = match backend_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return error_result,
+        };
+        if let Some(backend) = guard.as_ref() {
+            backend.scale_factor() as f32
+        } else {
+            1.0f32
+        }
+    };
+
+    // Scale font size for physical pixels
+    let scaled_descriptor = FontDescriptor {
+        source: descriptor.source,
+        weight: descriptor.weight,
+        style: descriptor.style,
+        size: descriptor.size * scale_factor,
+    };
+
+    // Use global LinuxGlyphRasterizer (preserves font caches across calls)
+    let rasterizer = get_linux_rasterizer();
+    let mut rasterizer = match rasterizer.lock() {
+        Ok(r) => r,
+        Err(_) => return error_result,
+    };
+
+    let width = if text_str.is_empty() {
+        0.0
+    } else {
+        rasterizer.measure_string(text_str, &scaled_descriptor)
+    };
+
+    let (ascent, descent) = rasterizer.get_font_metrics(&scaled_descriptor);
+    let height = ascent + descent;
+
+    TextMeasurement {
+        width: width / scale_factor,
+        height: height / scale_factor,
+        ascent: ascent / scale_factor,
+        descent: descent / scale_factor,
+    }
+}
+
+/// Linux implementation: Pointer-based version for purego compatibility
+///
+/// # Safety
+/// - text must be a valid null-terminated UTF-8 string
+/// - font_json must be a valid null-terminated UTF-8 JSON string
+/// - out must be a valid pointer to a TextMeasurement struct
+#[cfg(target_os = "linux")]
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub unsafe extern "C" fn centered_measure_text_metrics_with_font_ptr(
+    text: *const c_char,
+    font_json: *const c_char,
+    out: *mut TextMeasurement,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+
+    let result = centered_measure_text_metrics_with_font(text, font_json);
+    *out = result;
+    0
 }
 
 // Windows implementations for text measurement using DirectWrite

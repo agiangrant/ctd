@@ -592,8 +592,9 @@ func propagateHeightsUp(w *Widget) {
 			totalChildHeight += gap * float32(numChildren-1)
 		}
 		requiredHeight = totalChildHeight + padding[0] + padding[2]
-	} else if kind == KindHStack {
-		// HStack: check for flex-wrap (multiple lines)
+	} else if kind == KindHStack || (kind == KindContainer && w.flexDirection == FlexRow) {
+		// HStack or Container with flex-direction: row
+		// Check for flex-wrap (multiple lines)
 		flexWrap := w.flexWrap
 
 		if flexWrap != FlexNoWrap {
@@ -2191,8 +2192,8 @@ func SyncBoundsFromLayout(root *Widget) {
 		return
 	}
 
-	var syncBounds func(w *Widget, depth int)
-	syncBounds = func(w *Widget, depth int) {
+	var syncBounds func(w *Widget)
+	syncBounds = func(w *Widget) {
 		w.mu.Lock()
 		layout := w.computedLayout
 		// Update bounds from layout
@@ -2208,11 +2209,11 @@ func SyncBoundsFromLayout(root *Widget) {
 
 		// Recursively sync children
 		for _, child := range children {
-			syncBounds(child, depth+1)
+			syncBounds(child)
 		}
 
 		releaseWidgetSlice(children)
 	}
 
-	syncBounds(root, 0)
+	syncBounds(root)
 }

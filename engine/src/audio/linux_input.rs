@@ -224,6 +224,14 @@ impl AudioInputBackend for LinuxAudioInput {
     }
 }
 
+impl LinuxAudioInput {
+    /// Update method for compatibility with polling-based platforms.
+    /// Linux uses cpal callbacks so this is a no-op, but must exist for the trait.
+    pub fn update(&mut self) {
+        // cpal uses callbacks, no polling needed
+    }
+}
+
 // cpal Stream is Send but not Sync - we handle this carefully
 unsafe impl Send for LinuxAudioInput {}
 
