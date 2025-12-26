@@ -4,11 +4,22 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/agiangrant/centered/internal/ffi"
 )
 
 var layoutDebug = false // Set to true for debug logging
+
+// layoutVersion is incremented every time layout changes.
+// Used for cache invalidation to know when render commands need regeneration.
+var layoutVersion atomic.Uint64
+
+// LayoutVersion returns the current layout version.
+// This increments whenever ComputeLayout makes changes.
+func LayoutVersion() uint64 {
+	return layoutVersion.Load()
+}
 
 func debugLog(format string, args ...interface{}) {
 	if layoutDebug {
@@ -525,6 +536,9 @@ func ComputeLayout(root *Widget, windowWidth, windowHeight float32) bool {
 	// Pass 3: Re-position children based on updated heights
 	// This fixes sibling positions after height changes propagate up
 	repositionChildren(root)
+
+	// Increment layout version to invalidate any cached render commands
+	layoutVersion.Add(1)
 
 	return true
 }

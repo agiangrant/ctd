@@ -107,6 +107,283 @@ impl Default for StencilClipState {
     }
 }
 
+/// A pooled buffer for vertex or index data.
+/// Instead of creating new GPU buffers every frame, we reuse them.
+struct PooledBuffer {
+    buffer: wgpu::Buffer,
+    capacity: usize, // in bytes
+}
+
+/// Buffer pool for reusing GPU buffers across frames.
+/// This reduces allocation overhead significantly for frame-heavy rendering.
+///
+/// Usage pattern:
+/// 1. Call reset() at the start of each frame
+/// 2. Call prepare_vertex_buffer() / prepare_index_buffer() BEFORE the render pass
+/// 3. Get buffer references during the render pass using get_vertex_buffer() / get_index_buffer()
+struct BufferPool {
+    vertex_buffers: Vec<PooledBuffer>,
+    index_buffers: Vec<PooledBuffer>,
+    vertex_next: usize,
+    index_next: usize,
+}
+
+impl BufferPool {
+    fn new() -> Self {
+        Self {
+            vertex_buffers: Vec::new(),
+            index_buffers: Vec::new(),
+            vertex_next: 0,
+            index_next: 0,
+        }
+    }
+
+    /// Reset the pool at the start of each frame.
+    fn reset(&mut self) {
+        self.vertex_next = 0;
+        self.index_next = 0;
+    }
+
+    /// Prepare a vertex buffer with data and return its index.
+    /// Must be called BEFORE the render pass starts.
+    fn prepare_vertex_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &[u8],
+    ) -> usize {
+        let required_size = data.len();
+        let idx = self.vertex_next;
+
+        if idx < self.vertex_buffers.len() {
+            let pooled = &mut self.vertex_buffers[idx];
+            if pooled.capacity >= required_size {
+                queue.write_buffer(&pooled.buffer, 0, data);
+                self.vertex_next += 1;
+                return idx;
+            }
+            // Buffer too small, replace it
+            let new_capacity = required_size.next_power_of_two().max(4096);
+            pooled.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Pooled Vertex Buffer"),
+                size: new_capacity as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            pooled.capacity = new_capacity;
+            queue.write_buffer(&pooled.buffer, 0, data);
+            self.vertex_next += 1;
+            return idx;
+        }
+
+        // Create new buffer
+        let capacity = required_size.next_power_of_two().max(4096);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Pooled Vertex Buffer"),
+            size: capacity as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, data);
+        self.vertex_buffers.push(PooledBuffer { buffer, capacity });
+        self.vertex_next += 1;
+        idx
+    }
+
+    /// Prepare an index buffer with data and return its index.
+    fn prepare_index_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &[u8],
+    ) -> usize {
+        let required_size = data.len();
+        let idx = self.index_next;
+
+        if idx < self.index_buffers.len() {
+            let pooled = &mut self.index_buffers[idx];
+            if pooled.capacity >= required_size {
+                queue.write_buffer(&pooled.buffer, 0, data);
+                self.index_next += 1;
+                return idx;
+            }
+            let new_capacity = required_size.next_power_of_two().max(1024);
+            pooled.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Pooled Index Buffer"),
+                size: new_capacity as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            pooled.capacity = new_capacity;
+            queue.write_buffer(&pooled.buffer, 0, data);
+            self.index_next += 1;
+            return idx;
+        }
+
+        let capacity = required_size.next_power_of_two().max(1024);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Pooled Index Buffer"),
+            size: capacity as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, data);
+        self.index_buffers.push(PooledBuffer { buffer, capacity });
+        self.index_next += 1;
+        idx
+    }
+
+    /// Get a vertex buffer by index (for use during render pass).
+    fn get_vertex_buffer(&self, idx: usize) -> &wgpu::Buffer {
+        &self.vertex_buffers[idx].buffer
+    }
+
+    /// Get an index buffer by index.
+    fn get_index_buffer(&self, idx: usize) -> &wgpu::Buffer {
+        &self.index_buffers[idx].buffer
+    }
+}
+
+/// A prepared operation that can be executed during the render pass.
+/// These are created during the preparation phase when we have full mutable access.
+enum PreparedOp {
+    /// Set scissor rect for clipping
+    SetScissor { x: u32, y: u32, width: u32, height: u32 },
+
+    /// Set stencil reference value
+    SetStencilRef { value: u32 },
+
+    /// Draw geometry (rectangles, shadows) using the geometry pipeline
+    DrawGeometry {
+        vertex_buffer_idx: usize,
+        index_buffer_idx: usize,
+        index_count: u32,
+    },
+
+    /// Draw to stencil buffer for rounded clip
+    DrawStencil {
+        vertex_buffer_idx: usize,
+        index_buffer_idx: usize,
+        index_count: u32,
+    },
+
+    /// Draw text using the text pipeline (non-indexed, vertex-only)
+    DrawText {
+        vertex_buffer_idx: usize,
+        vertex_count: u32,
+    },
+
+    /// Draw image using the image pipeline (non-indexed, vertex-only)
+    DrawImage {
+        vertex_buffer_idx: usize,
+        vertex_count: u32,
+        texture_id: u32,
+    },
+}
+
+/// A prepared frame containing all draw operations and their buffers.
+/// This is created during the preparation phase (before the render pass)
+/// and executed during the render pass.
+struct PreparedFrame {
+    /// Clear color for the frame
+    clear_color: wgpu::Color,
+
+    /// All prepared operations in order
+    ops: Vec<PreparedOp>,
+}
+
+/// A cached render region for regional re-rendering.
+/// Regions are rendered to offscreen textures and composited to the final surface.
+#[allow(dead_code)]
+struct CachedRegion {
+    /// GPU texture for the cached region content
+    texture: wgpu::Texture,
+    /// Texture view for rendering to/from the texture
+    view: wgpu::TextureView,
+    /// Bind group for compositing this region
+    bind_group: wgpu::BindGroup,
+    /// Screen-space bounds of this region
+    bounds: (f32, f32, f32, f32), // (x, y, width, height)
+    /// Whether this region needs re-rendering
+    dirty: bool,
+    /// Frame number when this region was last rendered
+    last_frame: u64,
+}
+
+/// Region cache for managing offscreen render targets.
+#[allow(dead_code)]
+struct RegionCache {
+    /// Map from region ID to cached region
+    regions: HashMap<u32, CachedRegion>,
+    /// Next region ID to assign
+    next_id: u32,
+    /// Maximum memory budget for region textures (in bytes)
+    memory_budget: usize,
+    /// Current memory usage
+    current_memory: usize,
+}
+
+#[allow(dead_code)]
+impl RegionCache {
+    fn new(memory_budget: usize) -> Self {
+        Self {
+            regions: HashMap::new(),
+            next_id: 1,
+            memory_budget,
+            current_memory: 0,
+        }
+    }
+
+    /// Estimate memory usage for a region texture
+    fn estimate_memory(width: u32, height: u32) -> usize {
+        // RGBA8 = 4 bytes per pixel
+        (width as usize) * (height as usize) * 4
+    }
+
+    /// Check if we have room for a new region
+    fn can_allocate(&self, width: u32, height: u32) -> bool {
+        let needed = Self::estimate_memory(width, height);
+        self.current_memory + needed <= self.memory_budget
+    }
+
+    /// Mark a region as dirty
+    fn mark_dirty(&mut self, region_id: u32) {
+        if let Some(region) = self.regions.get_mut(&region_id) {
+            region.dirty = true;
+        }
+    }
+
+    /// Mark a region as clean after rendering
+    fn mark_clean(&mut self, region_id: u32, frame: u64) {
+        if let Some(region) = self.regions.get_mut(&region_id) {
+            region.dirty = false;
+            region.last_frame = frame;
+        }
+    }
+
+    /// Get all dirty regions
+    fn get_dirty_regions(&self) -> Vec<u32> {
+        self.regions.iter()
+            .filter(|(_, r)| r.dirty)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Remove a region and free its memory
+    fn remove(&mut self, region_id: u32) {
+        if let Some(region) = self.regions.remove(&region_id) {
+            let (_, _, w, h) = region.bounds;
+            self.current_memory -= Self::estimate_memory(w as u32, h as u32);
+        }
+    }
+
+    /// Clear all regions
+    fn clear(&mut self) {
+        self.regions.clear();
+        self.current_memory = 0;
+    }
+}
+
 /// wgpu rendering backend
 pub struct WgpuBackend {
     // wgpu core
@@ -168,6 +445,27 @@ pub struct WgpuBackend {
     image_pipeline: Option<wgpu::RenderPipeline>,
     image_bind_group_layout: Option<wgpu::BindGroupLayout>,
     next_texture_id: u32,
+
+    // Buffer pool for reusing GPU buffers across frames
+    buffer_pool: BufferPool,
+
+    // Region cache for offscreen render targets (regional re-rendering)
+    #[allow(dead_code)]
+    region_cache: RegionCache,
+
+    // Frame counter for dirty tracking
+    frame_counter: u64,
+
+    // Persistent frame texture for partial rendering optimization.
+    // We render to this texture (with scissor for partial updates),
+    // then blit to the swapchain. This avoids swapchain buffer issues
+    // where LoadOp::Load would load from a different buffer.
+    frame_texture: Option<wgpu::Texture>,
+    frame_texture_view: Option<wgpu::TextureView>,
+    blit_pipeline: Option<wgpu::RenderPipeline>,
+    blit_bind_group: Option<wgpu::BindGroup>,
+    blit_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    blit_sampler: Option<wgpu::Sampler>,
 }
 
 impl WgpuBackend {
@@ -224,6 +522,16 @@ impl WgpuBackend {
             stencil_view: None,
             stencil_pipeline: None,
             stencil_clip_state: StencilClipState::default(),
+            buffer_pool: BufferPool::new(),
+            // 64MB budget for region textures (~4-6 full-screen textures at 1080p)
+            region_cache: RegionCache::new(64 * 1024 * 1024),
+            frame_counter: 0,
+            frame_texture: None,
+            frame_texture_view: None,
+            blit_pipeline: None,
+            blit_bind_group: None,
+            blit_bind_group_layout: None,
+            blit_sampler: None,
         }
     }
 
@@ -371,6 +679,11 @@ impl WgpuBackend {
         let (stencil_texture, stencil_view) = self.create_stencil_texture(&device, config.width, config.height);
         let stencil_pipeline = self.create_stencil_pipeline(&device, &surface_config)?;
 
+        // Create frame texture and blit pipeline for partial rendering optimization
+        let (frame_texture, frame_texture_view) = self.create_frame_texture(&device, &surface_config);
+        let (blit_pipeline, blit_bind_group_layout, blit_sampler) = self.create_blit_pipeline(&device, &surface_config)?;
+        let blit_bind_group = self.create_blit_bind_group(&device, &blit_bind_group_layout, &frame_texture_view, &blit_sampler);
+
         self.adapter = Some(adapter);
         self.device = Some(device);
         self.queue = Some(queue);
@@ -385,6 +698,12 @@ impl WgpuBackend {
         self.stencil_texture = Some(stencil_texture);
         self.stencil_view = Some(stencil_view);
         self.stencil_pipeline = Some(stencil_pipeline);
+        self.frame_texture = Some(frame_texture);
+        self.frame_texture_view = Some(frame_texture_view);
+        self.blit_pipeline = Some(blit_pipeline);
+        self.blit_bind_group = Some(blit_bind_group);
+        self.blit_bind_group_layout = Some(blit_bind_group_layout);
+        self.blit_sampler = Some(blit_sampler);
 
         Ok(())
     }
@@ -537,6 +856,180 @@ impl WgpuBackend {
         });
 
         Ok(pipeline)
+    }
+
+    /// Create or recreate the persistent frame texture for partial rendering.
+    /// We render to this texture instead of directly to the swapchain,
+    /// which allows partial updates with LoadOp::Load to work correctly.
+    fn create_frame_texture(
+        &self,
+        device: &wgpu::Device,
+        surface_config: &wgpu::SurfaceConfiguration,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Frame Texture"),
+            size: wgpu::Extent3d {
+                width: surface_config.width,
+                height: surface_config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface_config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Create the blit pipeline for copying frame texture to swapchain.
+    fn create_blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        surface_config: &wgpu::SurfaceConfiguration,
+    ) -> Result<(wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler), Box<dyn Error>> {
+        // Simple fullscreen quad shader
+        let shader_source = r#"
+            struct VertexOutput {
+                @builtin(position) position: vec4<f32>,
+                @location(0) tex_coord: vec2<f32>,
+            }
+
+            @vertex
+            fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+                // Fullscreen triangle (covers entire screen with one triangle)
+                var positions = array<vec2<f32>, 3>(
+                    vec2<f32>(-1.0, -1.0),
+                    vec2<f32>(3.0, -1.0),
+                    vec2<f32>(-1.0, 3.0)
+                );
+                var tex_coords = array<vec2<f32>, 3>(
+                    vec2<f32>(0.0, 1.0),
+                    vec2<f32>(2.0, 1.0),
+                    vec2<f32>(0.0, -1.0)
+                );
+
+                var out: VertexOutput;
+                out.position = vec4<f32>(positions[vertex_index], 0.0, 1.0);
+                out.tex_coord = tex_coords[vertex_index];
+                return out;
+            }
+
+            @group(0) @binding(0) var t_frame: texture_2d<f32>;
+            @group(0) @binding(1) var s_frame: sampler;
+
+            @fragment
+            fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+                return textureSample(t_frame, s_frame, in.tex_coord);
+            }
+        "#;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Blit Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Blit Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Blit Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Blit Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Blit Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Ok((pipeline, bind_group_layout, sampler))
+    }
+
+    /// Create bind group for blitting the frame texture to swapchain
+    fn create_blit_bind_group(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        frame_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blit Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(frame_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
     }
 
     fn create_text_pipeline(
@@ -1211,8 +1704,26 @@ impl WgpuBackend {
         [ndc_x, ndc_y]
     }
 
-    /// Render a frame with the given commands
+    /// Render a frame with the given commands.
+    /// This uses the optimized two-phase rendering with buffer pooling.
     pub fn render_frame(&mut self, commands: &[RenderCommand]) -> Result<(), Box<dyn Error>> {
+        self.render_frame_with_scissor(commands, None)
+    }
+
+    /// Render frame with optional scissor rect for partial rendering.
+    /// If scissor is Some, only pixels within that rect are rendered (GPU optimization).
+    pub fn render_frame_with_scissor(
+        &mut self,
+        commands: &[RenderCommand],
+        scissor: Option<(u32, u32, u32, u32)>, // (x, y, width, height) in physical pixels
+    ) -> Result<(), Box<dyn Error>> {
+        self.render_frame_pooled_with_scissor(commands, scissor)
+    }
+
+    /// Legacy render frame implementation (kept for reference and fallback).
+    /// This processes commands inline without buffer pooling.
+    #[allow(dead_code)]
+    fn render_frame_legacy(&mut self, commands: &[RenderCommand]) -> Result<(), Box<dyn Error>> {
         let surface = self.surface.as_ref().ok_or("Surface not initialized")?;
         let device = self.device.as_ref().ok_or("Device not initialized")?;
 
@@ -1531,14 +2042,1022 @@ impl WgpuBackend {
             surface.configure(device, config);
         }
 
-        // Recreate stencil texture with new dimensions (separate block to avoid borrow conflict)
+        // Recreate stencil texture with new dimensions
         if let Some(device) = &self.device {
-            let stencil_width = width.max(1);
-            let stencil_height = height.max(1);
-            let (stencil_texture, stencil_view) = self.create_stencil_texture(device, stencil_width, stencil_height);
+            let w = width.max(1);
+            let h = height.max(1);
+            let (stencil_texture, stencil_view) = self.create_stencil_texture(device, w, h);
             self.stencil_texture = Some(stencil_texture);
             self.stencil_view = Some(stencil_view);
         }
+
+        // Recreate frame texture with new dimensions
+        if let (Some(device), Some(config)) = (&self.device, self.surface_config.as_ref()) {
+            let (frame_texture, frame_texture_view) = self.create_frame_texture(device, config);
+            if let (Some(layout), Some(sampler)) = (self.blit_bind_group_layout.as_ref(), self.blit_sampler.as_ref()) {
+                let blit_bind_group = self.create_blit_bind_group(device, layout, &frame_texture_view, sampler);
+                self.blit_bind_group = Some(blit_bind_group);
+            }
+            self.frame_texture = Some(frame_texture);
+            self.frame_texture_view = Some(frame_texture_view);
+        }
+
+        Ok(())
+    }
+
+    /// Prepare geometry vertices and indices for drawing.
+    /// Returns (vertex_buffer_idx, index_buffer_idx, index_count).
+    fn prepare_geometry(
+        &mut self,
+        vertices: &[crate::render::Vertex],
+        indices: &[u16],
+    ) -> (usize, usize, u32) {
+        let device = self.device.as_ref().expect("Device not initialized");
+        let queue = self.queue.as_ref().expect("Queue not initialized");
+
+        // Convert to geometry vertices
+        let geometry_vertices: Vec<GeometryVertex> = vertices.iter().map(|v| {
+            GeometryVertex {
+                position: v.position,
+                texcoord: v.texcoord,
+                color: v.color,
+            }
+        }).collect();
+
+        let vertex_idx = self.buffer_pool.prepare_vertex_buffer(
+            device,
+            queue,
+            bytemuck::cast_slice(&geometry_vertices),
+        );
+
+        let index_idx = self.buffer_pool.prepare_index_buffer(
+            device,
+            queue,
+            bytemuck::cast_slice(indices),
+        );
+
+        (vertex_idx, index_idx, indices.len() as u32)
+    }
+
+    /// Prepare a rectangle for drawing (handles scaling, rotation, borders).
+    /// Returns prepared geometry indices.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: u32,
+        corner_radii: [f32; 4],
+        rotation: f32,
+        border: Option<&crate::render::Border>,
+        gradient: Option<&crate::render::Gradient>,
+    ) -> Vec<(usize, usize, u32)> {
+        let scale = self.scale_factor as f32;
+        let scaled_x = (x * scale).floor();
+        let scaled_y = (y * scale).floor();
+        let scaled_width = (width * scale).ceil();
+        let scaled_height = (height * scale).ceil();
+        let scaled_radii = [
+            corner_radii[0] * scale,
+            corner_radii[1] * scale,
+            corner_radii[2] * scale,
+            corner_radii[3] * scale,
+        ];
+
+        let mut results = Vec::new();
+
+        // Generate fill geometry
+        let (vertices, indices) = if let Some(gradient) = gradient {
+            crate::geometry::gradient_rect(
+                scaled_x, scaled_y, scaled_width, scaled_height,
+                gradient, scaled_radii,
+            )
+        } else {
+            crate::geometry::rounded_rect(
+                scaled_x, scaled_y, scaled_width, scaled_height,
+                color, scaled_radii,
+            )
+        };
+
+        // Apply rotation and convert to NDC
+        let center_x = scaled_x + scaled_width / 2.0;
+        let center_y = scaled_y + scaled_height / 2.0;
+        let cos_r = rotation.cos();
+        let sin_r = rotation.sin();
+
+        let ndc_vertices: Vec<crate::render::Vertex> = vertices.iter().map(|v| {
+            let (rx, ry) = if rotation.abs() > 0.0001 {
+                let dx = v.position[0] - center_x;
+                let dy = v.position[1] - center_y;
+                (center_x + dx * cos_r - dy * sin_r, center_y + dx * sin_r + dy * cos_r)
+            } else {
+                (v.position[0], v.position[1])
+            };
+            let ndc = self.screen_to_ndc(rx, ry);
+            crate::render::Vertex {
+                position: [ndc[0], ndc[1], 0.0],
+                texcoord: v.texcoord,
+                color: v.color,
+            }
+        }).collect();
+
+        results.push(self.prepare_geometry(&ndc_vertices, &indices));
+
+        // Generate border geometry if present
+        if let Some(border) = border {
+            let scaled_border_width = border.width * scale;
+            let (border_vertices, border_indices) = crate::geometry::border_rect(
+                scaled_x, scaled_y, scaled_width, scaled_height,
+                scaled_border_width, border.color, scaled_radii,
+            );
+
+            let ndc_border_vertices: Vec<crate::render::Vertex> = border_vertices.iter().map(|v| {
+                let (rx, ry) = if rotation.abs() > 0.0001 {
+                    let dx = v.position[0] - center_x;
+                    let dy = v.position[1] - center_y;
+                    (center_x + dx * cos_r - dy * sin_r, center_y + dx * sin_r + dy * cos_r)
+                } else {
+                    (v.position[0], v.position[1])
+                };
+                let ndc = self.screen_to_ndc(rx, ry);
+                crate::render::Vertex {
+                    position: [ndc[0], ndc[1], 0.0],
+                    texcoord: v.texcoord,
+                    color: v.color,
+                }
+            }).collect();
+
+            results.push(self.prepare_geometry(&ndc_border_vertices, &border_indices));
+        }
+
+        results
+    }
+
+    /// Prepare a stencil mask for rounded clipping.
+    fn prepare_stencil_mask(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        corner_radii: [f32; 4],
+    ) -> (usize, usize, u32) {
+        let scale = self.scale_factor as f32;
+        let scaled_x = x * scale;
+        let scaled_y = y * scale;
+        let scaled_width = width * scale;
+        let scaled_height = height * scale;
+        let scaled_radii = [
+            corner_radii[0] * scale,
+            corner_radii[1] * scale,
+            corner_radii[2] * scale,
+            corner_radii[3] * scale,
+        ];
+
+        let (vertices, indices) = crate::geometry::rounded_rect(
+            scaled_x, scaled_y, scaled_width, scaled_height,
+            0xFFFFFFFF, scaled_radii,
+        );
+
+        // Convert to NDC positions only (stencil pipeline only uses position.xy)
+        let ndc_positions: Vec<[f32; 2]> = vertices.iter().map(|v| {
+            let ndc = self.screen_to_ndc(v.position[0], v.position[1]);
+            [ndc[0], ndc[1]]
+        }).collect();
+
+        let device = self.device.as_ref().expect("Device not initialized");
+        let queue = self.queue.as_ref().expect("Queue not initialized");
+
+        let vertex_idx = self.buffer_pool.prepare_vertex_buffer(
+            device,
+            queue,
+            bytemuck::cast_slice(&ndc_positions),
+        );
+
+        let index_idx = self.buffer_pool.prepare_index_buffer(
+            device,
+            queue,
+            bytemuck::cast_slice(&indices),
+        );
+
+        (vertex_idx, index_idx, indices.len() as u32)
+    }
+
+    /// Prepare a shadow for drawing.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_shadow(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        blur: f32,
+        color: u32,
+        offset_x: f32,
+        offset_y: f32,
+        corner_radii: [f32; 4],
+    ) -> (usize, usize, u32) {
+        let scale = self.scale_factor as f32;
+        let scaled_x = x * scale;
+        let scaled_y = y * scale;
+        let scaled_width = width * scale;
+        let scaled_height = height * scale;
+        let scaled_blur = blur * scale;
+        let scaled_offset_x = offset_x * scale;
+        let scaled_offset_y = offset_y * scale;
+        let scaled_radii = [
+            corner_radii[0] * scale,
+            corner_radii[1] * scale,
+            corner_radii[2] * scale,
+            corner_radii[3] * scale,
+        ];
+
+        let (vertices, indices) = crate::geometry::shadow_rect(
+            scaled_x, scaled_y, scaled_width, scaled_height,
+            scaled_blur, color, scaled_offset_x, scaled_offset_y, scaled_radii,
+        );
+
+        let ndc_vertices: Vec<crate::render::Vertex> = vertices.iter().map(|v| {
+            let ndc = self.screen_to_ndc(v.position[0], v.position[1]);
+            crate::render::Vertex {
+                position: [ndc[0], ndc[1], 0.0],
+                texcoord: v.texcoord,
+                color: v.color,
+            }
+        }).collect();
+
+        self.prepare_geometry(&ndc_vertices, &indices)
+    }
+
+    /// Prepare text for drawing, returning buffer index and vertex count.
+    /// Returns None if text is empty or preparation fails.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_text(
+        &mut self,
+        x: f32,
+        y: f32,
+        text: &str,
+        font: &FontDescriptor,
+        color: u32,
+        layout: &TextLayoutConfig,
+    ) -> Option<(usize, u32)> {
+        if text.is_empty() {
+            return None;
+        }
+
+        // Extract RGBA from u32 color
+        let r = ((color >> 24) & 0xFF) as f32 / 255.0;
+        let g = ((color >> 16) & 0xFF) as f32 / 255.0;
+        let b = ((color >> 8) & 0xFF) as f32 / 255.0;
+        let a = (color & 0xFF) as f32 / 255.0;
+        let text_color = [r, g, b, a];
+
+        let scale = self.scale_factor as f32;
+        let font_size = font.size * scale;
+        let scaled_x = x * scale;
+        let scaled_y = y * scale;
+        let scaled_max_width = layout.max_width.map(|w| w * scale);
+
+        let scaled_font = FontDescriptor {
+            source: font.source.clone(),
+            weight: font.weight,
+            style: font.style,
+            size: font_size,
+        };
+
+        // Get font metrics
+        let (ascent, descent) = self.rasterizer.get_font_metrics(&scaled_font);
+        let actual_font_height = ascent + descent;
+        let line_height_px = actual_font_height * layout.line_height;
+        let letter_spacing_px = layout.letter_spacing * font_size;
+        let word_spacing_px = layout.word_spacing * font_size;
+
+        // Compute font ID
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        scaled_font.cache_key().hash(&mut hasher);
+        let font_id = hasher.finish();
+
+        // Layout text into lines
+        let all_lines = self.layout_text_lines(
+            text, &scaled_font, font_id, font_size, scaled_max_width,
+            letter_spacing_px, word_spacing_px, layout, scale
+        ).ok()?;
+
+        // Calculate max lines
+        let max_lines_from_setting = layout.max_lines.unwrap_or(usize::MAX);
+        let max_lines_from_height = if let Some(max_h) = layout.max_height {
+            let scaled_max_h = max_h * scale;
+            let first_line_height = actual_font_height;
+            if scaled_max_h < first_line_height {
+                1
+            } else {
+                let remaining = scaled_max_h - first_line_height;
+                (1 + (remaining / line_height_px).floor() as usize).max(1)
+            }
+        } else {
+            usize::MAX
+        };
+        let max_lines = max_lines_from_setting.min(max_lines_from_height);
+
+        // Check for ellipsis
+        let needs_line_ellipsis = layout.overflow == TextOverflow::Ellipsis && all_lines.len() > max_lines;
+        let needs_width_ellipsis = layout.overflow == TextOverflow::Ellipsis
+            && scaled_max_width.is_some()
+            && all_lines.len() == 1
+            && all_lines.get(0).map(|l| l.width > scaled_max_width.unwrap()).unwrap_or(false);
+        let needs_ellipsis = needs_line_ellipsis || needs_width_ellipsis;
+
+        // Apply ellipsis if needed
+        let lines: Vec<TextLine> = if needs_ellipsis && max_lines > 0 {
+            let mut truncated_lines: Vec<_> = all_lines.into_iter().take(max_lines).collect();
+            if let Some(last_line) = truncated_lines.last_mut() {
+                let ellipsis_glyphs = self.rasterize_text_segment("…", &scaled_font, font_id, font_size).ok()?;
+                let ellipsis_width: f32 = ellipsis_glyphs.iter().map(|g| g.entry.advance).sum();
+
+                if let Some(max_w) = scaled_max_width {
+                    let target_width = max_w - ellipsis_width;
+                    if target_width > 0.0 {
+                        let mut current_width = 0.0;
+                        let mut truncate_index = 0;
+                        for (i, glyph_info) in last_line.glyphs.iter().enumerate() {
+                            let next_width = current_width + glyph_info.entry.advance;
+                            if next_width > target_width {
+                                truncate_index = i;
+                                break;
+                            }
+                            current_width = next_width;
+                            truncate_index = i + 1;
+                        }
+                        last_line.glyphs.truncate(truncate_index);
+                        last_line.glyphs.extend(ellipsis_glyphs);
+                        last_line.width = current_width + ellipsis_width;
+                    }
+                } else {
+                    last_line.glyphs.extend(ellipsis_glyphs);
+                    last_line.width += ellipsis_width;
+                }
+            }
+            truncated_lines
+        } else {
+            all_lines.into_iter().take(max_lines).collect()
+        };
+
+        // Generate vertices
+        let mut vertices: Vec<TextVertex> = Vec::new();
+        let line_count = lines.len();
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let is_last_line = line_idx == line_count - 1;
+            let line_baseline_y = scaled_y + ascent + (line_idx as f32 * line_height_px);
+
+            let (line_x, justify_extra_space) = match layout.alignment {
+                TextAlign::Left => (scaled_x, 0.0),
+                TextAlign::Center => {
+                    let x = if let Some(max_w) = scaled_max_width {
+                        scaled_x + (max_w - line.width) / 2.0
+                    } else {
+                        scaled_x
+                    };
+                    (x, 0.0)
+                }
+                TextAlign::Right => {
+                    let x = if let Some(max_w) = scaled_max_width {
+                        scaled_x + max_w - line.width
+                    } else {
+                        scaled_x
+                    };
+                    (x, 0.0)
+                }
+                TextAlign::Justify => {
+                    if is_last_line {
+                        (scaled_x, 0.0)
+                    } else if let Some(max_w) = scaled_max_width {
+                        let space_count = line.glyphs.iter().filter(|g| g.character == ' ').count();
+                        if space_count > 0 {
+                            let extra_space = max_w - line.width;
+                            let extra_per_space = extra_space / space_count as f32;
+                            (scaled_x, extra_per_space)
+                        } else {
+                            (scaled_x, 0.0)
+                        }
+                    } else {
+                        (scaled_x, 0.0)
+                    }
+                }
+            };
+
+            let mut current_x = line_x;
+            for glyph_info in &line.glyphs {
+                let entry = glyph_info.entry;
+                let glyph_color = if glyph_info.is_emoji {
+                    [1.0, 1.0, 1.0, a]
+                } else {
+                    text_color
+                };
+
+                let glyph_x = current_x + entry.bearing_x;
+                let glyph_y = line_baseline_y - entry.bearing_y;
+                let glyph_width = entry.width as f32;
+                let glyph_height = entry.height as f32;
+
+                let top_left = self.screen_to_ndc(glyph_x, glyph_y);
+                let top_right = self.screen_to_ndc(glyph_x + glyph_width, glyph_y);
+                let bottom_left = self.screen_to_ndc(glyph_x, glyph_y + glyph_height);
+                let bottom_right = self.screen_to_ndc(glyph_x + glyph_width, glyph_y + glyph_height);
+
+                let use_texture_color = if glyph_info.is_emoji { 1.0 } else { 0.0 };
+
+                // Triangle 1
+                vertices.push(TextVertex { position: top_left, tex_coords: [entry.u0, entry.v0], color: glyph_color, use_texture_color });
+                vertices.push(TextVertex { position: bottom_left, tex_coords: [entry.u0, entry.v1], color: glyph_color, use_texture_color });
+                vertices.push(TextVertex { position: top_right, tex_coords: [entry.u1, entry.v0], color: glyph_color, use_texture_color });
+                // Triangle 2
+                vertices.push(TextVertex { position: top_right, tex_coords: [entry.u1, entry.v0], color: glyph_color, use_texture_color });
+                vertices.push(TextVertex { position: bottom_left, tex_coords: [entry.u0, entry.v1], color: glyph_color, use_texture_color });
+                vertices.push(TextVertex { position: bottom_right, tex_coords: [entry.u1, entry.v1], color: glyph_color, use_texture_color });
+
+                let mut advance = entry.advance + letter_spacing_px;
+                if glyph_info.character == ' ' {
+                    advance += word_spacing_px + justify_extra_space;
+                }
+                current_x += advance;
+            }
+        }
+
+        if vertices.is_empty() {
+            return None;
+        }
+
+        // Upload to buffer pool
+        let device = self.device.as_ref()?;
+        let queue = self.queue.as_ref()?;
+        let vertex_idx = self.buffer_pool.prepare_vertex_buffer(
+            device,
+            queue,
+            bytemuck::cast_slice(&vertices),
+        );
+
+        Some((vertex_idx, vertices.len() as u32))
+    }
+
+    /// Prepare an image for drawing, returning buffer index and vertex count.
+    fn prepare_image(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        texture_id: u32,
+        source_rect: Option<(f32, f32, f32, f32)>,
+        corner_radii: [f32; 4],
+    ) -> Option<(usize, u32)> {
+        // Check if texture exists
+        if !self.image_textures.contains_key(&texture_id) {
+            return None;
+        }
+
+        let scale = self.scale_factor as f32;
+        let scaled_x = x * scale;
+        let scaled_y = y * scale;
+        let scaled_w = width * scale;
+        let scaled_h = height * scale;
+
+        let (u0, v0, u1, v1) = source_rect.unwrap_or((0.0, 0.0, 1.0, 1.0));
+        let color = [1.0f32, 1.0, 1.0, 1.0];
+
+        let has_rounded = corner_radii.iter().any(|&r| r > 0.5);
+
+        let vertices: Vec<TextVertex> = if has_rounded {
+            self.generate_rounded_image_vertices(
+                scaled_x, scaled_y, scaled_w, scaled_h,
+                corner_radii.map(|r| r * scale),
+                u0, v0, u1, v1,
+                color,
+            )
+        } else {
+            let left = scaled_x;
+            let right = scaled_x + scaled_w;
+            let top = scaled_y;
+            let bottom = scaled_y + scaled_h;
+
+            let tl = self.screen_to_ndc(left, top);
+            let tr = self.screen_to_ndc(right, top);
+            let bl = self.screen_to_ndc(left, bottom);
+            let br = self.screen_to_ndc(right, bottom);
+
+            vec![
+                TextVertex { position: tl, tex_coords: [u0, v0], color, use_texture_color: 1.0 },
+                TextVertex { position: bl, tex_coords: [u0, v1], color, use_texture_color: 1.0 },
+                TextVertex { position: tr, tex_coords: [u1, v0], color, use_texture_color: 1.0 },
+                TextVertex { position: tr, tex_coords: [u1, v0], color, use_texture_color: 1.0 },
+                TextVertex { position: bl, tex_coords: [u0, v1], color, use_texture_color: 1.0 },
+                TextVertex { position: br, tex_coords: [u1, v1], color, use_texture_color: 1.0 },
+            ]
+        };
+
+        // Upload to buffer pool
+        let device = self.device.as_ref()?;
+        let queue = self.queue.as_ref()?;
+        let vertex_idx = self.buffer_pool.prepare_vertex_buffer(
+            device,
+            queue,
+            bytemuck::cast_slice(&vertices),
+        );
+
+        Some((vertex_idx, vertices.len() as u32))
+    }
+
+    /// Prepare a complete frame for rendering.
+    /// This walks all commands, uploads buffers, and returns a PreparedFrame
+    /// that can be executed during the render pass.
+    fn prepare_frame(&mut self, commands: &[RenderCommand]) -> PreparedFrame {
+        // Reset buffer pool for this frame
+        self.buffer_pool.reset();
+
+        let scale = self.scale_factor as f32;
+        let full_width = self.width;
+        let full_height = self.height;
+
+        // Track scroll state during preparation (mirrors render-time state)
+        let mut scroll_offset_stack: Vec<ScrollOffset> = Vec::new();
+        let mut scissor_stack: Vec<ScissorRect> = Vec::new();
+        let mut stencil_active = false;
+
+        // Determine clear color
+        let clear_color = commands.iter()
+            .find_map(|cmd| {
+                if let RenderCommand::Clear(color) = cmd {
+                    Some(wgpu::Color {
+                        r: (color.r as f64) / 255.0,
+                        g: (color.g as f64) / 255.0,
+                        b: (color.b as f64) / 255.0,
+                        a: (color.a as f64) / 255.0,
+                    })
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(wgpu::Color::BLACK);
+
+        let mut ops = Vec::with_capacity(commands.len() * 2); // Estimate capacity
+
+        // Set initial scissor
+        ops.push(PreparedOp::SetScissor {
+            x: 0, y: 0,
+            width: full_width,
+            height: full_height,
+        });
+
+        for cmd in commands {
+            match cmd {
+                RenderCommand::Clear(_) => {
+                    // Clear is handled by render pass load op
+                }
+                RenderCommand::PushClip { x, y, width, height } => {
+                    let clip_x = (*x * scale) as u32;
+                    let clip_y = (*y * scale) as u32;
+                    let clip_w = (*width * scale) as u32;
+                    let clip_h = (*height * scale) as u32;
+
+                    let new_rect = if let Some(parent) = scissor_stack.last() {
+                        let int_x = clip_x.max(parent.x);
+                        let int_y = clip_y.max(parent.y);
+                        let parent_right = parent.x.saturating_add(parent.width);
+                        let parent_bottom = parent.y.saturating_add(parent.height);
+                        let clip_right = clip_x.saturating_add(clip_w);
+                        let clip_bottom = clip_y.saturating_add(clip_h);
+                        let int_right = clip_right.min(parent_right);
+                        let int_bottom = clip_bottom.min(parent_bottom);
+                        ScissorRect {
+                            x: int_x, y: int_y,
+                            width: int_right.saturating_sub(int_x),
+                            height: int_bottom.saturating_sub(int_y),
+                        }
+                    } else {
+                        ScissorRect { x: clip_x, y: clip_y, width: clip_w, height: clip_h }
+                    };
+
+                    let clamped = clamp_scissor_to_viewport(new_rect, full_width, full_height);
+                    scissor_stack.push(clamped);
+                    ops.push(PreparedOp::SetScissor {
+                        x: clamped.x, y: clamped.y,
+                        width: clamped.width.max(1),
+                        height: clamped.height.max(1),
+                    });
+                }
+                RenderCommand::PopClip {} => {
+                    if stencil_active {
+                        ops.push(PreparedOp::SetStencilRef { value: 0 });
+                        stencil_active = false;
+                    } else {
+                        scissor_stack.pop();
+                        if let Some(parent) = scissor_stack.last() {
+                            ops.push(PreparedOp::SetScissor {
+                                x: parent.x, y: parent.y,
+                                width: parent.width.max(1),
+                                height: parent.height.max(1),
+                            });
+                        } else {
+                            ops.push(PreparedOp::SetScissor {
+                                x: 0, y: 0,
+                                width: full_width,
+                                height: full_height,
+                            });
+                        }
+                    }
+                }
+                RenderCommand::PushRoundedClip { x, y, width, height, corner_radii } => {
+                    let (v_idx, i_idx, i_count) = self.prepare_stencil_mask(*x, *y, *width, *height, *corner_radii);
+                    ops.push(PreparedOp::DrawStencil {
+                        vertex_buffer_idx: v_idx,
+                        index_buffer_idx: i_idx,
+                        index_count: i_count,
+                    });
+                    ops.push(PreparedOp::SetStencilRef { value: 1 });
+                    stencil_active = true;
+                }
+                RenderCommand::BeginScrollView { x, y, width, height, scroll_x, scroll_y, .. } => {
+                    // Calculate parent scroll offset
+                    let (parent_scroll_dx, parent_scroll_dy) = scroll_offset_stack.iter()
+                        .fold((0.0f32, 0.0f32), |(dx, dy), s| (dx - s.offset_x, dy - s.offset_y));
+
+                    scroll_offset_stack.push(ScrollOffset {
+                        viewport_x: *x,
+                        viewport_y: *y,
+                        offset_x: *scroll_x,
+                        offset_y: *scroll_y,
+                    });
+
+                    // Calculate clip rect
+                    let adjusted_x = *x + parent_scroll_dx;
+                    let adjusted_y = *y + parent_scroll_dy;
+
+                    let (clip_x, clip_w) = if adjusted_x < 0.0 {
+                        (0u32, ((*width + adjusted_x) * scale).max(0.0) as u32)
+                    } else {
+                        ((adjusted_x * scale) as u32, (*width * scale) as u32)
+                    };
+
+                    let (clip_y, clip_h) = if adjusted_y < 0.0 {
+                        (0u32, ((*height + adjusted_y) * scale).max(0.0) as u32)
+                    } else {
+                        ((adjusted_y * scale) as u32, (*height * scale) as u32)
+                    };
+
+                    let new_rect = if let Some(parent) = scissor_stack.last() {
+                        let int_x = clip_x.max(parent.x);
+                        let int_y = clip_y.max(parent.y);
+                        let int_right = (clip_x + clip_w).min(parent.x + parent.width);
+                        let int_bottom = (clip_y + clip_h).min(parent.y + parent.height);
+                        ScissorRect {
+                            x: int_x, y: int_y,
+                            width: if int_right > int_x { int_right - int_x } else { 0 },
+                            height: if int_bottom > int_y { int_bottom - int_y } else { 0 },
+                        }
+                    } else {
+                        ScissorRect { x: clip_x, y: clip_y, width: clip_w, height: clip_h }
+                    };
+
+                    let clamped = clamp_scissor_to_viewport(new_rect, full_width, full_height);
+                    scissor_stack.push(clamped);
+                    ops.push(PreparedOp::SetScissor {
+                        x: clamped.x, y: clamped.y,
+                        width: clamped.width.max(1),
+                        height: clamped.height.max(1),
+                    });
+                }
+                RenderCommand::EndScrollView {} => {
+                    scroll_offset_stack.pop();
+                    scissor_stack.pop();
+                    if let Some(parent) = scissor_stack.last() {
+                        ops.push(PreparedOp::SetScissor {
+                            x: parent.x, y: parent.y,
+                            width: parent.width.max(1),
+                            height: parent.height.max(1),
+                        });
+                    } else {
+                        ops.push(PreparedOp::SetScissor {
+                            x: 0, y: 0,
+                            width: full_width,
+                            height: full_height,
+                        });
+                    }
+                }
+                RenderCommand::DrawShadow { x, y, width, height, blur, color, offset_x, offset_y, corner_radii } => {
+                    let (scroll_dx, scroll_dy) = scroll_offset_stack.iter()
+                        .fold((0.0f32, 0.0f32), |(dx, dy), s| (dx - s.offset_x, dy - s.offset_y));
+                    let (v_idx, i_idx, i_count) = self.prepare_shadow(
+                        *x + scroll_dx, *y + scroll_dy,
+                        *width, *height, *blur, *color,
+                        *offset_x, *offset_y, *corner_radii,
+                    );
+                    ops.push(PreparedOp::DrawGeometry {
+                        vertex_buffer_idx: v_idx,
+                        index_buffer_idx: i_idx,
+                        index_count: i_count,
+                    });
+                }
+                RenderCommand::DrawRect { x, y, width, height, color, corner_radii, rotation, border, gradient } => {
+                    let (scroll_dx, scroll_dy) = scroll_offset_stack.iter()
+                        .fold((0.0f32, 0.0f32), |(dx, dy), s| (dx - s.offset_x, dy - s.offset_y));
+                    let prepared = self.prepare_rect(
+                        *x + scroll_dx, *y + scroll_dy,
+                        *width, *height, *color, *corner_radii, *rotation,
+                        border.as_ref(), gradient.as_ref(),
+                    );
+                    for (v_idx, i_idx, i_count) in prepared {
+                        ops.push(PreparedOp::DrawGeometry {
+                            vertex_buffer_idx: v_idx,
+                            index_buffer_idx: i_idx,
+                            index_count: i_count,
+                        });
+                    }
+                }
+                RenderCommand::DrawTriangles { vertices, indices, .. } => {
+                    let (v_idx, i_idx, i_count) = self.prepare_geometry(vertices, indices);
+                    ops.push(PreparedOp::DrawGeometry {
+                        vertex_buffer_idx: v_idx,
+                        index_buffer_idx: i_idx,
+                        index_count: i_count,
+                    });
+                }
+                RenderCommand::DrawText { x, y, text, font, color, layout } => {
+                    let (scroll_dx, scroll_dy) = scroll_offset_stack.iter()
+                        .fold((0.0f32, 0.0f32), |(dx, dy), s| (dx - s.offset_x, dy - s.offset_y));
+                    if let Some((v_idx, v_count)) = self.prepare_text(
+                        *x + scroll_dx, *y + scroll_dy,
+                        text, font, *color, layout,
+                    ) {
+                        ops.push(PreparedOp::DrawText {
+                            vertex_buffer_idx: v_idx,
+                            vertex_count: v_count,
+                        });
+                    }
+                }
+                RenderCommand::DrawImage { x, y, width, height, texture_id, source_rect, corner_radii } => {
+                    let (scroll_dx, scroll_dy) = scroll_offset_stack.iter()
+                        .fold((0.0f32, 0.0f32), |(dx, dy), s| (dx - s.offset_x, dy - s.offset_y));
+                    if let Some((v_idx, v_count)) = self.prepare_image(
+                        *x + scroll_dx, *y + scroll_dy,
+                        *width, *height, *texture_id, *source_rect, *corner_radii,
+                    ) {
+                        ops.push(PreparedOp::DrawImage {
+                            vertex_buffer_idx: v_idx,
+                            vertex_count: v_count,
+                            texture_id: *texture_id,
+                        });
+                    }
+                }
+                _ => {
+                    // Other commands ignored
+                }
+            }
+        }
+
+        PreparedFrame { clear_color, ops }
+    }
+
+    /// Execute a prepared frame during the render pass.
+    /// Uses state tracking to minimize redundant pipeline and bind group switches.
+    fn execute_prepared_frame(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        prepared: &PreparedFrame,
+    ) {
+        let geometry_pipeline = self.geometry_pipeline.as_ref().expect("Geometry pipeline not initialized");
+        let stencil_pipeline = self.stencil_pipeline.as_ref().expect("Stencil pipeline not initialized");
+        let text_pipeline = self.text_pipeline.as_ref().expect("Text pipeline not initialized");
+        let text_bind_group = self.text_bind_group.as_ref().expect("Text bind group not initialized");
+        let image_pipeline = self.image_pipeline.as_ref().expect("Image pipeline not initialized");
+
+        // State tracking to avoid redundant GPU state changes
+        #[derive(PartialEq, Clone, Copy)]
+        enum CurrentPipeline {
+            None,
+            Geometry,
+            Stencil,
+            Text,
+            Image,
+        }
+
+        let mut current_pipeline = CurrentPipeline::None;
+        let mut current_image_texture: Option<u32> = None;
+        let mut text_bind_group_set = false;
+
+        for op in &prepared.ops {
+            match op {
+                PreparedOp::SetScissor { x, y, width, height } => {
+                    render_pass.set_scissor_rect(*x, *y, *width, *height);
+                }
+                PreparedOp::SetStencilRef { value } => {
+                    render_pass.set_stencil_reference(*value);
+                }
+                PreparedOp::DrawGeometry { vertex_buffer_idx, index_buffer_idx, index_count } => {
+                    let vertex_buffer = self.buffer_pool.get_vertex_buffer(*vertex_buffer_idx);
+                    let index_buffer = self.buffer_pool.get_index_buffer(*index_buffer_idx);
+                    if current_pipeline != CurrentPipeline::Geometry {
+                        render_pass.set_pipeline(geometry_pipeline);
+                        current_pipeline = CurrentPipeline::Geometry;
+                    }
+                    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    render_pass.draw_indexed(0..*index_count, 0, 0..1);
+                }
+                PreparedOp::DrawStencil { vertex_buffer_idx, index_buffer_idx, index_count } => {
+                    let vertex_buffer = self.buffer_pool.get_vertex_buffer(*vertex_buffer_idx);
+                    let index_buffer = self.buffer_pool.get_index_buffer(*index_buffer_idx);
+                    render_pass.set_stencil_reference(1);
+                    if current_pipeline != CurrentPipeline::Stencil {
+                        render_pass.set_pipeline(stencil_pipeline);
+                        current_pipeline = CurrentPipeline::Stencil;
+                    }
+                    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    render_pass.draw_indexed(0..*index_count, 0, 0..1);
+                }
+                PreparedOp::DrawText { vertex_buffer_idx, vertex_count } => {
+                    let vertex_buffer = self.buffer_pool.get_vertex_buffer(*vertex_buffer_idx);
+                    if current_pipeline != CurrentPipeline::Text {
+                        render_pass.set_pipeline(text_pipeline);
+                        current_pipeline = CurrentPipeline::Text;
+                        text_bind_group_set = false;
+                    }
+                    if !text_bind_group_set {
+                        render_pass.set_bind_group(0, text_bind_group, &[]);
+                        text_bind_group_set = true;
+                    }
+                    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    render_pass.draw(0..*vertex_count, 0..1);
+                }
+                PreparedOp::DrawImage { vertex_buffer_idx, vertex_count, texture_id } => {
+                    if let Some(gpu_texture) = self.image_textures.get(texture_id) {
+                        let vertex_buffer = self.buffer_pool.get_vertex_buffer(*vertex_buffer_idx);
+                        if current_pipeline != CurrentPipeline::Image {
+                            render_pass.set_pipeline(image_pipeline);
+                            current_pipeline = CurrentPipeline::Image;
+                            current_image_texture = None; // Force bind group update on pipeline switch
+                        }
+                        // Only update bind group if texture changed
+                        if current_image_texture != Some(*texture_id) {
+                            render_pass.set_bind_group(0, &gpu_texture.bind_group, &[]);
+                            current_image_texture = Some(*texture_id);
+                        }
+                        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                        render_pass.draw(0..*vertex_count, 0..1);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Render a frame using the two-phase approach (prepare then execute).
+    /// This version uses buffer pooling for improved performance.
+    pub fn render_frame_pooled(&mut self, commands: &[RenderCommand]) -> Result<(), Box<dyn Error>> {
+        self.render_frame_pooled_with_scissor(commands, None)
+    }
+
+    /// Optimized two-phase rendering with buffer pooling and optional scissor rect.
+    /// Uses a persistent frame texture for partial rendering - we render to our own
+    /// texture (with scissor for partial updates), then blit to swapchain.
+    pub fn render_frame_pooled_with_scissor(
+        &mut self,
+        commands: &[RenderCommand],
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) -> Result<(), Box<dyn Error>> {
+        // First, get the surface texture to check for size changes
+        let frame = {
+            let surface = self.surface.as_ref().ok_or("Surface not initialized")?;
+            surface.get_current_texture()?
+        };
+
+        let actual_width = frame.texture.width();
+        let actual_height = frame.texture.height();
+
+        // Handle size mismatch - recreate all size-dependent resources
+        if actual_width != self.width || actual_height != self.height {
+            self.width = actual_width;
+            self.height = actual_height;
+
+            let device = self.device.as_ref().ok_or("Device not initialized")?;
+            let surface = self.surface.as_ref().ok_or("Surface not initialized")?;
+
+            // Update surface config
+            if let Some(config) = &mut self.surface_config {
+                config.width = actual_width.max(1);
+                config.height = actual_height.max(1);
+                surface.configure(device, config);
+            }
+
+            // Recreate stencil texture
+            let (stencil_texture, stencil_view) = self.create_stencil_texture(device, actual_width.max(1), actual_height.max(1));
+            self.stencil_texture = Some(stencil_texture);
+            self.stencil_view = Some(stencil_view);
+
+            // Recreate frame texture and blit bind group for new size
+            if let Some(config) = self.surface_config.as_ref() {
+                let (frame_texture, frame_texture_view) = self.create_frame_texture(device, config);
+                if let (Some(layout), Some(sampler)) = (self.blit_bind_group_layout.as_ref(), self.blit_sampler.as_ref()) {
+                    let blit_bind_group = self.create_blit_bind_group(device, layout, &frame_texture_view, sampler);
+                    self.blit_bind_group = Some(blit_bind_group);
+                }
+                self.frame_texture = Some(frame_texture);
+                self.frame_texture_view = Some(frame_texture_view);
+            }
+        }
+
+        // Phase 1: Prepare all draw operations and upload buffers
+        let prepared = self.prepare_frame(commands);
+
+        // Upload text atlas if any glyphs were rasterized during text preparation
+        let _ = self.upload_atlas_if_needed();
+
+        // Phase 2: Render to our persistent frame texture
+        let device = self.device.as_ref().ok_or("Device not initialized")?;
+        let queue = self.queue.as_ref().ok_or("Queue not initialized")?;
+        let stencil_view = self.stencil_view.as_ref().ok_or("Stencil view not initialized")?;
+        let frame_texture_view = self.frame_texture_view.as_ref().ok_or("Frame texture not initialized")?;
+        let blit_pipeline = self.blit_pipeline.as_ref().ok_or("Blit pipeline not initialized")?;
+        let blit_bind_group = self.blit_bind_group.as_ref().ok_or("Blit bind group not initialized")?;
+
+        let swapchain_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        });
+
+        // Render to frame texture (not swapchain)
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Frame Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: frame_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // LoadOp::Load preserves previous frame content for partial updates
+                        // LoadOp::Clear for full redraw
+                        load: if scissor.is_some() {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(prepared.clear_color)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: stencil_view,
+                    depth_ops: None,
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            // Apply scissor rect if provided (partial update)
+            // Clamp to frame texture dimensions to avoid validation errors
+            if let Some((x, y, w, h)) = scissor {
+                let clamped = clamp_scissor_to_viewport(
+                    ScissorRect { x, y, width: w, height: h },
+                    self.width,
+                    self.height,
+                );
+                render_pass.set_scissor_rect(clamped.x, clamped.y, clamped.width, clamped.height);
+            }
+
+            render_pass.set_stencil_reference(0);
+            self.execute_prepared_frame(&mut render_pass, &prepared);
+        }
+
+        // Blit frame texture to swapchain
+        {
+            let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Blit Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &swapchain_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            blit_pass.set_pipeline(blit_pipeline);
+            blit_pass.set_bind_group(0, blit_bind_group, &[]);
+            blit_pass.draw(0..3, 0..1); // Fullscreen triangle
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
 
         Ok(())
     }

@@ -318,7 +318,12 @@ func (d *EventDispatcher) DispatchMouseMove(screenX, screenY float32, mods Modif
 	// This ensures parents stay hovered when mouse moves to child
 	if !d.chainsEqual(d.hoveredChain, newChain) {
 		d.updateHoverState(newHovered, screenX, screenY, mods, newChain)
-		needsRedraw = true // Hover state changed, need redraw
+		// Only request redraw if hover state change actually caused visual changes
+		// (e.g., hover styles that differ from default styles)
+		// The style system now only marks widgets dirty if property values actually change
+		if d.tree != nil && d.tree.HasPendingUpdates() {
+			needsRedraw = true
+		}
 	}
 
 	// Dispatch mouse move to hovered widget

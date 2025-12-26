@@ -214,7 +214,9 @@ type FrameResponseC struct {
 	WidgetDelta       uintptr
 	RequestRedraw     bool
 	RedrawAfterMs     uint32
-	DarkMode          uint8 // 0 = light, 1 = dark, 2 = auto/system
+	DarkMode          uint8   // 0 = light, 1 = dark, 2 = auto/system
+	Layers            uintptr // JSON array of LayerInfo for regional caching
+	DirtyRegion       uintptr // JSON DirtyRegion for scissor-based partial rendering
 }
 
 // AppConfigC matches the C struct layout for app configuration
@@ -788,6 +790,28 @@ func (e Event) ScrollDelta() (float64, float64) {
 // Frame Response and Handler
 // ============================================================================
 
+// LayerInfo describes a render layer for regional caching
+type LayerInfo struct {
+	ID       uint32  `json:"id"`        // Unique layer identifier
+	X        float32 `json:"x"`         // Screen-space X position
+	Y        float32 `json:"y"`         // Screen-space Y position
+	Width    float32 `json:"width"`     // Layer width
+	Height   float32 `json:"height"`    // Layer height
+	ZOrder   int     `json:"z_order"`   // Compositing order (lower = further back)
+	Opaque   bool    `json:"opaque"`    // True if fully opaque (no blending needed)
+	Dirty    bool    `json:"dirty"`     // True if layer needs re-rendering
+	Commands []RenderCommand `json:"commands,omitempty"` // Commands for this layer (only if dirty)
+}
+
+// DirtyRegion represents a screen region that needs redrawing.
+// Rust will use this to set a scissor rect, skipping pixels outside this area.
+type DirtyRegion struct {
+	X      float32 `json:"x"`
+	Y      float32 `json:"y"`
+	Width  float32 `json:"width"`
+	Height float32 `json:"height"`
+}
+
 // FrameResponse is returned by the event handler
 type FrameResponse struct {
 	ImmediateCommands []RenderCommand
@@ -796,6 +820,14 @@ type FrameResponse struct {
 	RedrawAfterMs     uint32 // Schedule a redraw after N milliseconds (0 = no delayed redraw)
 	Exit              bool   // Request app exit
 	DarkMode          uint8  // 0 = light, 1 = dark, 2 = auto/system
+
+	// Layer-based rendering (optional - when set, ImmediateCommands may be ignored)
+	Layers []LayerInfo `json:"layers,omitempty"` // Per-layer render data for regional caching
+
+	// Dirty region for scissor-based partial rendering (optional)
+	// If set, Rust will apply a scissor rect to skip pixels outside this region.
+	// If nil, full screen is redrawn.
+	DirtyRegion *DirtyRegion `json:"dirty_region,omitempty"`
 }
 
 // EventHandler is called for each event from the engine
@@ -924,6 +956,8 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) uintpt
 	response.DarkMode = goResponse.DarkMode
 	response.ImmediateCommands = 0
 	response.WidgetDelta = 0
+	response.Layers = 0
+	response.DirtyRegion = 0
 
 	// Render immediate commands
 	if len(goResponse.ImmediateCommands) > 0 {
@@ -963,6 +997,26 @@ func appCallback(eventPtr uintptr, responsePtr uintptr, userData uintptr) uintpt
 		if err == nil {
 			b := append(jsonBytes, 0)
 			response.WidgetDelta = uintptr(unsafe.Pointer(&b[0]))
+			runtime.KeepAlive(b)
+		}
+	}
+
+	// Serialize layers for regional caching
+	if len(goResponse.Layers) > 0 {
+		jsonBytes, err := json.Marshal(goResponse.Layers)
+		if err == nil {
+			b := append(jsonBytes, 0)
+			response.Layers = uintptr(unsafe.Pointer(&b[0]))
+			runtime.KeepAlive(b)
+		}
+	}
+
+	// Serialize dirty region for scissor-based partial rendering
+	if goResponse.DirtyRegion != nil {
+		jsonBytes, err := json.Marshal(goResponse.DirtyRegion)
+		if err == nil {
+			b := append(jsonBytes, 0)
+			response.DirtyRegion = uintptr(unsafe.Pointer(&b[0]))
 			runtime.KeepAlive(b)
 		}
 	}

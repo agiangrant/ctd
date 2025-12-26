@@ -1629,6 +1629,47 @@ pub struct FrameResponse {
     /// Dark mode for window controls: 0 = light, 1 = dark, 2 = auto/system
     /// Updated each frame to allow runtime changes
     pub dark_mode: u8,
+    /// Layer-based rendering: JSON array of LayerInfo for regional caching
+    /// When set, enables per-layer texture caching and compositing
+    /// Set to null to use immediate_commands instead
+    pub layers: *mut c_char,
+    /// Dirty region for scissor-based partial rendering
+    /// JSON of DirtyRegion. If set, Rust applies scissor rect to skip pixels outside.
+    /// Set to null for full screen redraw.
+    pub dirty_region: *mut c_char,
+}
+
+/// Dirty region for scissor-based partial rendering
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DirtyRegion {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Layer information for regional caching
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LayerInfo {
+    /// Unique layer identifier
+    pub id: u32,
+    /// Screen-space X position
+    pub x: f32,
+    /// Screen-space Y position
+    pub y: f32,
+    /// Layer width
+    pub width: f32,
+    /// Layer height
+    pub height: f32,
+    /// Compositing order (lower = further back)
+    pub z_order: i32,
+    /// True if fully opaque (no blending needed)
+    pub opaque: bool,
+    /// True if layer needs re-rendering
+    pub dirty: bool,
+    /// Commands for this layer (only present if dirty)
+    #[serde(default)]
+    pub commands: Vec<RenderCommand>,
 }
 
 /// Callback function type for the application loop
@@ -1962,7 +2003,25 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(ref mut backend) = *guard {
                         let mut all_commands = Vec::new();
 
-                        if let Some(ref json) = response.immediate_commands {
+                        // Check for layer-based rendering first
+                        if let Some(ref json) = response.layers {
+                            match serde_json::from_str::<Vec<LayerInfo>>(json) {
+                                Ok(layers) => {
+                                    // Sort layers by z_order (lower = further back)
+                                    let mut sorted_layers = layers;
+                                    sorted_layers.sort_by_key(|l| l.z_order);
+
+                                    // Collect commands from all layers in z-order
+                                    for layer in &sorted_layers {
+                                        all_commands.extend(layer.commands.clone());
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to parse layers: {}", e);
+                                }
+                            }
+                        } else if let Some(ref json) = response.immediate_commands {
+                            // Fall back to immediate commands if no layers
                             match serde_json::from_str::<Vec<RenderCommand>>(json) {
                                 Ok(commands) => {
                                     all_commands.extend(commands);
@@ -2113,7 +2172,9 @@ impl ApplicationHandler<UserEvent> for App {
                         }
 
                         if !all_commands.is_empty() {
-                            if let Err(e) = backend.render_frame(&all_commands) {
+                            // Get scissor rect from dirty region (if any)
+                            let scissor = response.get_scissor_rect(scale_factor);
+                            if let Err(e) = backend.render_frame_with_scissor(&all_commands, scissor) {
                                 eprintln!("Render error: {}", e);
                             }
                         }
@@ -2443,11 +2504,25 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(ref mut backend) = *guard {
                         let mut all_commands = Vec::new();
 
-                        // TODO: First, render dirty retained widgets
-                        // all_commands.extend(self.widget_tree.render_dirty());
+                        // Check for layer-based rendering first
+                        if let Some(ref json) = response.layers {
+                            match serde_json::from_str::<Vec<LayerInfo>>(json) {
+                                Ok(layers) => {
+                                    // Sort layers by z_order (lower = further back)
+                                    let mut sorted_layers = layers;
+                                    sorted_layers.sort_by_key(|l| l.z_order);
 
-                        // Then, add immediate mode commands on top
-                        if let Some(ref json) = response.immediate_commands {
+                                    // Collect commands from all layers in z-order
+                                    for layer in &sorted_layers {
+                                        all_commands.extend(layer.commands.clone());
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to parse layers: {}", e);
+                                }
+                            }
+                        } else if let Some(ref json) = response.immediate_commands {
+                            // Fall back to immediate commands if no layers
                             match serde_json::from_str::<Vec<RenderCommand>>(json) {
                                 Ok(commands) => {
                                     all_commands.extend(commands);
@@ -2597,7 +2672,9 @@ impl ApplicationHandler<UserEvent> for App {
 
                         // Execute all commands
                         if !all_commands.is_empty() {
-                            if let Err(e) = backend.render_frame(&all_commands) {
+                            // Get scissor rect from dirty region (if any)
+                            let scissor = response.get_scissor_rect(scale_factor);
+                            if let Err(e) = backend.render_frame_with_scissor(&all_commands, scissor) {
                                 eprintln!("Render error: {}", e);
                             }
                         }
@@ -3190,6 +3267,30 @@ struct ProcessedResponse {
     request_redraw: bool,
     redraw_after_ms: u32,
     dark_mode: u8,
+    layers: Option<String>,
+    dirty_region: Option<String>,
+}
+
+impl ProcessedResponse {
+    /// Parse dirty_region JSON and convert to physical pixel scissor rect.
+    /// Returns None if no dirty region (meaning full redraw).
+    fn get_scissor_rect(&self, scale_factor: f64) -> Option<(u32, u32, u32, u32)> {
+        let json = self.dirty_region.as_ref()?;
+        match serde_json::from_str::<DirtyRegion>(json) {
+            Ok(region) => {
+                // Convert logical pixels to physical pixels
+                let x = (region.x as f64 * scale_factor) as u32;
+                let y = (region.y as f64 * scale_factor) as u32;
+                let w = (region.width as f64 * scale_factor).ceil() as u32;
+                let h = (region.height as f64 * scale_factor).ceil() as u32;
+                Some((x, y, w.max(1), h.max(1)))
+            }
+            Err(e) => {
+                eprintln!("Failed to parse dirty_region: {}", e);
+                None
+            }
+        }
+    }
 }
 
 impl App {
@@ -3201,6 +3302,8 @@ impl App {
             request_redraw: false,
             redraw_after_ms: 0,
             dark_mode: 2, // Default to auto/system
+            layers: ptr::null_mut(),
+            dirty_region: ptr::null_mut(),
         };
 
         // Call the Go callback
@@ -3228,12 +3331,28 @@ impl App {
             c_str.to_str().ok().map(String::from)
         };
 
+        let layers = if response.layers.is_null() {
+            None
+        } else {
+            let c_str = unsafe { CStr::from_ptr(response.layers) };
+            c_str.to_str().ok().map(String::from)
+        };
+
+        let dirty_region = if response.dirty_region.is_null() {
+            None
+        } else {
+            let c_str = unsafe { CStr::from_ptr(response.dirty_region) };
+            c_str.to_str().ok().map(String::from)
+        };
+
         ProcessedResponse {
             immediate_commands,
             widget_delta,
             request_redraw: response.request_redraw,
             redraw_after_ms: response.redraw_after_ms,
             dark_mode: response.dark_mode,
+            layers,
+            dirty_region,
         }
     }
 
@@ -3479,6 +3598,8 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
                         widget_delta: std::ptr::null_mut(),
                         request_redraw: false,
                         redraw_after_ms: 0,
+                        dark_mode: 2,
+                        layers: std::ptr::null_mut(),
                     };
                     c_callback(&char_event, &mut temp_response, user_data);
                 }
@@ -3505,6 +3626,8 @@ unsafe fn run_ios_app(config: &AppConfig, callback: AppCallback) -> i32 {
             widget_delta: std::ptr::null_mut(),
             request_redraw: false,
             redraw_after_ms: 0,
+            dark_mode: 2,
+            layers: std::ptr::null_mut(),
         };
 
         c_callback(&app_event, &mut frame_response, user_data);
@@ -3660,6 +3783,8 @@ unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
                         widget_delta: std::ptr::null_mut(),
                         request_redraw: false,
                         redraw_after_ms: 0,
+                        dark_mode: 2,
+                        layers: std::ptr::null_mut(),
                     };
                     c_callback(&char_event, &mut temp_response, user_data);
                 }
@@ -3722,6 +3847,8 @@ unsafe fn run_android_app(config: &AppConfig, callback: AppCallback) -> i32 {
             widget_delta: std::ptr::null_mut(),
             request_redraw: false,
             redraw_after_ms: 0,
+            dark_mode: 2,
+            layers: std::ptr::null_mut(),
         };
 
         c_callback(&app_event, &mut frame_response, user_data);

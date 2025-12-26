@@ -91,6 +91,103 @@ func (c *textMeasureCache) clear() {
 // For a book reader with lots of text, this prevents memory from growing unbounded.
 var globalTextCache = newTextMeasureCache(10000)
 
+// CachedTextLayout stores the result of text wrapping for a given configuration.
+// This avoids expensive line-breaking calculations on every frame.
+type CachedTextLayout struct {
+	Lines       []WrappedLine
+	TotalHeight float32
+}
+
+// textLayoutCache is an LRU cache for wrapped text layouts.
+// Key format: "wrap|text|maxWidth|fontSize|fontName|fontFamily"
+type textLayoutCache struct {
+	mu      sync.Mutex
+	maxSize int
+	cache   map[string]*list.Element
+	lru     *list.List
+}
+
+type layoutCacheEntry struct {
+	key    string
+	layout CachedTextLayout
+}
+
+func newTextLayoutCache(maxSize int) *textLayoutCache {
+	return &textLayoutCache{
+		maxSize: maxSize,
+		cache:   make(map[string]*list.Element),
+		lru:     list.New(),
+	}
+}
+
+func (c *textLayoutCache) get(key string) (CachedTextLayout, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, ok := c.cache[key]; ok {
+		c.lru.MoveToFront(elem)
+		return elem.Value.(*layoutCacheEntry).layout, true
+	}
+	return CachedTextLayout{}, false
+}
+
+func (c *textLayoutCache) put(key string, layout CachedTextLayout) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, ok := c.cache[key]; ok {
+		c.lru.MoveToFront(elem)
+		elem.Value.(*layoutCacheEntry).layout = layout
+		return
+	}
+
+	// Evict oldest entries if at capacity
+	for c.lru.Len() >= c.maxSize {
+		oldest := c.lru.Back()
+		if oldest != nil {
+			c.lru.Remove(oldest)
+			delete(c.cache, oldest.Value.(*layoutCacheEntry).key)
+		}
+	}
+
+	// Add new entry
+	entry := &layoutCacheEntry{key: key, layout: layout}
+	elem := c.lru.PushFront(entry)
+	c.cache[key] = elem
+}
+
+// globalTextLayoutCache caches wrapped text layouts.
+// Smaller than globalTextCache since layouts are larger objects.
+var globalTextLayoutCache = newTextLayoutCache(2000)
+
+// WrapTextCached wraps text and caches the result for subsequent calls.
+// This avoids expensive line-breaking on every frame.
+func WrapTextCached(text string, maxWidth, fontSize float32, fontName string, lineHeight float32) CachedTextLayout {
+	return WrapTextWithFontCached(text, maxWidth, fontSize, fontName, "", lineHeight)
+}
+
+// WrapTextWithFontCached wraps text with font family support and caches the result.
+func WrapTextWithFontCached(text string, maxWidth, fontSize float32, fontName, fontFamily string, lineHeight float32) CachedTextLayout {
+	// Build cache key
+	key := fmt.Sprintf("wrap|%s|%.1f|%.1f|%s|%s", text, maxWidth, fontSize, fontName, fontFamily)
+
+	// Check cache first
+	if layout, ok := globalTextLayoutCache.get(key); ok {
+		return layout
+	}
+
+	// Cache miss: compute the layout
+	lines := WrapTextWithFont(text, maxWidth, fontSize, fontName, fontFamily)
+
+	layout := CachedTextLayout{
+		Lines:       lines,
+		TotalHeight: float32(len(lines)) * lineHeight,
+	}
+
+	globalTextLayoutCache.put(key, layout)
+	return layout
+}
+
 // httpClient is a shared HTTP client for fetching images from URLs.
 // Using a shared client enables connection pooling and reuse.
 var httpClient = &http.Client{
@@ -468,6 +565,20 @@ type Loop struct {
 	// This is needed because camera frames may be uploaded during tree traversal,
 	// but old textures may still be referenced by render commands generated earlier
 	pendingTextureUnloads []uint32
+
+	// Frame-level command caching to avoid regenerating commands when nothing changed
+	cachedCommands     []ffi.RenderCommand // Last rendered commands
+	commandsCacheValid bool                // True if cached commands can be reused
+	lastLayoutVersion  uint64              // Layout version when commands were cached
+
+	// Layer-based regional rendering
+	layers              *LayerManager        // Manages widget-to-layer assignments
+	layersInitialized   bool                 // True after first layout pass
+	cachedLayerCommands map[LayerID][]ffi.RenderCommand // Per-layer command cache
+
+	// Dirty region tracking for scissor-based partial rendering
+	dirtyRegion     *Bounds // Union of all changed widget bounds (nil = full redraw)
+	fullRedrawNext  bool    // Force full redraw on next frame
 }
 
 // scrollContext tracks the current scroll view for sticky positioning
@@ -509,15 +620,17 @@ func NewLoop(config LoopConfig) *Loop {
 	}
 
 	loop := &Loop{
-		tree:             tree,
-		config:           config,
-		animations:       NewAnimationRegistry(),
-		events:           events,
-		targetFrameTime:  time.Second / time.Duration(config.TargetFPS),
-		breakpoints:      breakpoints,
-		colorScheme:      config.ColorScheme,
-		darkMode:         darkMode,
-		naturalScrolling: ffi.GetNaturalScrolling(),
+		tree:                tree,
+		config:              config,
+		animations:          NewAnimationRegistry(),
+		events:              events,
+		targetFrameTime:     time.Second / time.Duration(config.TargetFPS),
+		breakpoints:         breakpoints,
+		colorScheme:         config.ColorScheme,
+		darkMode:            darkMode,
+		naturalScrolling:    ffi.GetNaturalScrolling(),
+		layers:              NewLayerManager(),
+		cachedLayerCommands: make(map[LayerID][]ffi.RenderCommand),
 	}
 
 	// Set dark mode provider so widgets can check dark mode state
@@ -759,7 +872,8 @@ func (l *Loop) handleEvent(event ffi.Event) ffi.FrameResponse {
 		l.mouseX, l.mouseY = x, y
 		hoverChanged := l.events.DispatchMouseMove(x, y, l.convertModifiers(event.Modifiers()))
 		// Request redraw if hover state changed OR if event handlers modified widget state
-		needsRedraw := hoverChanged || l.tree.HasPendingUpdates()
+		hasPending := l.tree.HasPendingUpdates()
+		needsRedraw := hoverChanged || hasPending
 		return l.response(needsRedraw)
 
 	case ffi.EventMousePressed:
@@ -1126,6 +1240,11 @@ func (l *Loop) tick() ffi.FrameResponse {
 		SyncBoundsFromLayout(l.tree.Root())
 	}
 
+	// Initialize or update layer assignments after layout
+	if layoutChanged || !l.layersInitialized {
+		l.initializeLayers()
+	}
+
 	frameNum := l.tree.IncrementFrame()
 	l.frameCount.Add(1)
 
@@ -1149,32 +1268,296 @@ func (l *Loop) tick() ffi.FrameResponse {
 	// Deduplicate updates
 	deltas := l.tree.DeduplicateUpdates(updates)
 
-	// Build render commands - single FFI call with all batched updates
-	commands := l.buildRenderCommands(frame, deltas)
+	// Reset dirty region for this frame
+	l.resetDirtyRegion()
 
-	// Determine if we need to keep requesting redraws:
-	// - Active animations need continuous 60 FPS
-	// - User's onFrame callback with immediate draws needs continuous updates
-	// - Cursor blink changed (include in this frame)
-	// - Playing videos/audio need continuous frame updates for time tracking
-	// - Streaming video (receiving live frames) needs continuous updates
-	// - Otherwise, only redraw when something changes (events will trigger redraws)
+	// Compute dirty regions from changed widgets
+	for widgetID := range deltas {
+		if w := l.tree.Widget(widgetID); w != nil {
+			l.markWidgetDirty(w)
+		}
+		l.layers.MarkWidgetDirty(widgetID)
+	}
+
+	// For dynamic content (animations, scrolling), we need full redraw
+	// because widgets may be moving/animating
+	needsFullRedraw := hasActiveAnimations || hasMomentumScrolling
+	if needsFullRedraw {
+		l.dirtyRegion = nil // nil = full redraw
+		l.layers.InvalidateAll()
+	}
+
 	hasImmediateDraws := len(frame.immediateCommands) > 0
+
+	// Build layer-based render response
+	layers := l.buildLayerCommands(frame, frameNum)
+
+	// Save previous bounds for next frame's dirty tracking
+	l.tree.Walk(func(w *Widget) bool {
+		l.savePreviousBounds(w)
+		return true
+	})
+
+	// Determine if we need to keep requesting redraws
 	needsContinuousRedraw := hasActiveAnimations || hasMomentumScrolling || cursorBlinkChanged || hasPlayingVideo || hasPlayingAudio || hasStreamingVideo || (l.onFrame != nil && hasImmediateDraws)
 
 	// For cursor blink, use delayed redraw instead of continuous polling
-	// This allows CPU to sleep between blinks instead of running at 60 FPS
 	var redrawAfterMs uint32
 	if !needsContinuousRedraw && msUntilNextBlink > 0 {
 		redrawAfterMs = msUntilNextBlink
 	}
 
-	return ffi.FrameResponse{
-		ImmediateCommands: commands,
-		RequestRedraw:     needsContinuousRedraw,
-		RedrawAfterMs:     redrawAfterMs,
-		DarkMode:          l.darkModeFFI(),
+	// Convert dirty region to FFI format
+	var dirtyRegion *ffi.DirtyRegion
+	if l.dirtyRegion != nil {
+		dirtyRegion = &ffi.DirtyRegion{
+			X:      l.dirtyRegion.X,
+			Y:      l.dirtyRegion.Y,
+			Width:  l.dirtyRegion.Width,
+			Height: l.dirtyRegion.Height,
+		}
 	}
+
+	return ffi.FrameResponse{
+		Layers:        layers,
+		RequestRedraw: needsContinuousRedraw,
+		RedrawAfterMs: redrawAfterMs,
+		DarkMode:      l.darkModeFFI(),
+		DirtyRegion:   dirtyRegion,
+	}
+}
+
+// initializeLayers sets up the layer structure based on the current widget tree.
+// Called after layout changes to ensure layers match widget positions.
+func (l *Loop) initializeLayers() {
+	root := l.tree.Root()
+	if root == nil {
+		return
+	}
+
+	// Use smart layer assignment based on widget properties
+	l.assignWidgetLayers(root)
+	l.layersInitialized = true
+}
+
+// assignWidgetLayers creates layers based on widget structure.
+// This creates separate layers for:
+// - The root/background layer (contains all static, non-interactive widgets)
+// - Each interactive widget (buttons, text fields) gets its own layer
+// - ScrollViews get their own layer (content can scroll independently)
+func (l *Loop) assignWidgetLayers(root *Widget) {
+	// Clear existing layer assignments
+	l.layers.mu.Lock()
+	l.layers.layers = nil
+	l.layers.widgetLayer = make(map[WidgetID]LayerID)
+	l.layers.layerByID = make(map[LayerID]*Layer)
+	l.layers.mu.Unlock()
+
+	// Create a background/static layer for non-interactive widgets
+	bgLayer := l.layers.CreateLayer(
+		Bounds{X: 0, Y: 0, Width: l.windowWidth, Height: l.windowHeight},
+		OpacityOpaque,
+		0, // ZOrder 0 = background
+	)
+
+	// Walk the tree and assign widgets to layers
+	zOrder := 1
+	l.assignWidgetToLayers(root, bgLayer.ID, &zOrder)
+}
+
+// isInteractiveWidget returns true if the widget should have its own layer
+// because it changes frequently due to hover/focus/active states.
+func isInteractiveWidget(w *Widget) bool {
+	w.mu.RLock()
+	kind := w.kind
+	// Check if widget has hover styles defined (indicates it changes on hover)
+	hasHoverStyle := w.computedStyles != nil && w.computedStyles.Hover.BackgroundColor != nil
+	w.mu.RUnlock()
+
+	// A widget is interactive if it's a known interactive kind OR has hover styles
+	switch kind {
+	case KindButton, KindTextField, KindTextArea, KindCheckbox, KindRadio, KindSlider:
+		return true
+	default:
+		// Also treat widgets with hover styles as interactive
+		return hasHoverStyle
+	}
+}
+
+// assignWidgetToLayers recursively assigns widgets to appropriate layers.
+// Interactive widgets get their own layer; static widgets go to the background layer.
+func (l *Loop) assignWidgetToLayers(w *Widget, staticLayerID LayerID, zOrder *int) {
+	if isInteractiveWidget(w) {
+		// Create a new layer for this interactive widget
+		bounds := w.ComputedBounds()
+		layer := l.layers.CreateLayer(
+			Bounds{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: bounds.Height},
+			OpacityTransparent, // Interactive widgets are typically transparent (no full background)
+			*zOrder,
+		)
+		*zOrder++
+		l.layers.AssignWidget(w, layer.ID)
+
+		// Children of interactive widgets go in the same layer as the parent
+		w.mu.RLock()
+		children := make([]*Widget, len(w.children))
+		copy(children, w.children)
+		w.mu.RUnlock()
+
+		for _, child := range children {
+			l.assignSubtreeToLayer(child, layer.ID)
+		}
+	} else {
+		// Static widget goes to background layer
+		l.layers.AssignWidget(w, staticLayerID)
+
+		// Process children
+		w.mu.RLock()
+		children := make([]*Widget, len(w.children))
+		copy(children, w.children)
+		w.mu.RUnlock()
+
+		for _, child := range children {
+			l.assignWidgetToLayers(child, staticLayerID, zOrder)
+		}
+	}
+}
+
+// assignSubtreeToLayer recursively assigns a widget and all its children to a layer.
+func (l *Loop) assignSubtreeToLayer(w *Widget, layerID LayerID) {
+	l.layers.AssignWidget(w, layerID)
+
+	w.mu.RLock()
+	children := make([]*Widget, len(w.children))
+	copy(children, w.children)
+	w.mu.RUnlock()
+
+	for _, child := range children {
+		l.assignSubtreeToLayer(child, layerID)
+	}
+}
+
+// buildLayerCommands generates render commands organized by layer.
+// Only dirty layers have their commands regenerated; clean layers reuse cached commands.
+func (l *Loop) buildLayerCommands(frame *Frame, frameNum uint64) []ffi.LayerInfo {
+	allLayers := l.layers.GetAllLayers()
+	result := make([]ffi.LayerInfo, 0, len(allLayers))
+
+	// Clear deferred overlays from previous frame
+	l.deferredOverlays = l.deferredOverlays[:0]
+
+	// When we have a dirty region (partial redraw), we only need to send commands
+	// for layers that intersect the dirty region. The Rust side uses LoadOp::Load
+	// to preserve previous frame content, so clean layers don't need re-rendering.
+	isPartialRedraw := l.dirtyRegion != nil
+
+	for _, layer := range allLayers {
+		// Check if this layer has playing video or streaming content
+		hasPlayingMedia := l.layerHasPlayingMedia(layer)
+
+		info := ffi.LayerInfo{
+			ID:     uint32(layer.ID),
+			X:      layer.Bounds.X,
+			Y:      layer.Bounds.Y,
+			Width:  layer.Bounds.Width,
+			Height: layer.Bounds.Height,
+			ZOrder: layer.ZOrder,
+			Opaque: layer.Opacity == OpacityOpaque,
+			Dirty:  layer.Dirty || layer.AlwaysDynamic || hasPlayingMedia,
+		}
+
+		// Layer is dynamic if it has playing media or is marked AlwaysDynamic
+		isDynamic := hasPlayingMedia || layer.AlwaysDynamic
+
+		if info.Dirty {
+			// Generate commands for this layer
+			commands := l.generateLayerCommands(layer, frameNum)
+			info.Commands = commands
+
+			// Cache the commands for this layer (but not for dynamic content - changes every frame)
+			if !isDynamic {
+				l.cachedLayerCommands[layer.ID] = commands
+			}
+
+			// Mark layer as clean (dynamic layers stay dirty conceptually)
+			if !isDynamic {
+				l.layers.ClearLayerDirty(layer.ID, frameNum)
+			}
+
+			// For partial redraw with dynamic layers, expand dirty region to include this layer
+			if isPartialRedraw && isDynamic {
+				l.expandDirtyRegion(layer.Bounds, layer.Bounds)
+			}
+		} else if isPartialRedraw {
+			// For partial redraw, skip sending commands for clean layers.
+			// Rust uses LoadOp::Load which preserves previous frame content.
+			// This dramatically reduces FFI data transfer.
+			info.Commands = nil
+		} else {
+			// Full redraw: reuse cached commands if available
+			if cached, ok := l.cachedLayerCommands[layer.ID]; ok {
+				info.Commands = cached
+			}
+		}
+
+		result = append(result, info)
+	}
+
+	// Add deferred overlays as a final layer (dropdowns, popups, etc.)
+	if len(l.deferredOverlays) > 0 {
+		overlayLayer := ffi.LayerInfo{
+			ID:       0xFFFFFFFF, // Special ID for overlay layer
+			X:        0,
+			Y:        0,
+			Width:    l.windowWidth,
+			Height:   l.windowHeight,
+			ZOrder:   999999, // Always on top
+			Opaque:   false,  // Overlays are transparent
+			Dirty:    true,   // Overlays are always regenerated
+			Commands: l.deferredOverlays,
+		}
+		result = append(result, overlayLayer)
+	}
+
+	// Add immediate mode commands as another overlay layer
+	if len(frame.immediateCommands) > 0 {
+		immediateLayer := ffi.LayerInfo{
+			ID:       0xFFFFFFFE, // Special ID for immediate mode layer
+			X:        0,
+			Y:        0,
+			Width:    l.windowWidth,
+			Height:   l.windowHeight,
+			ZOrder:   999998, // Just below overlays
+			Opaque:   false,
+			Dirty:    true,
+			Commands: frame.immediateCommands,
+		}
+		result = append(result, immediateLayer)
+	}
+
+	return result
+}
+
+// generateLayerCommands renders all widgets in a layer to commands.
+func (l *Loop) generateLayerCommands(layer *Layer, frameNum uint64) []ffi.RenderCommand {
+	var commands []ffi.RenderCommand
+
+	// If this is the background layer (ZOrder 0), add clear command
+	if layer.ZOrder == 0 {
+		commands = append(commands, ffi.Clear(26, 26, 38, 255))
+	}
+
+	// Render each widget in the layer
+	for _, w := range layer.Widgets {
+		w.mu.RLock()
+		x := w.computedLayout.X
+		y := w.computedLayout.Y
+		w.mu.RUnlock()
+
+		commands = l.renderWidgetAt(commands, w, x, y, frameNum)
+	}
+
+	return commands
 }
 
 // updateCursorBlink updates the cursor blink state for focused text input widgets.
@@ -1272,6 +1655,32 @@ func hasPlayingMediaInTree(w *Widget) (hasPlayingVideo, hasPlayingAudio, hasStre
 	return hasPlayingVideo, hasPlayingAudio, hasStreamingVideo
 }
 
+// layerHasPlayingMedia checks if any widget in the layer has active video/streaming.
+// Only checks direct widget properties, no recursion needed since layer.Widgets is flat.
+func (l *Loop) layerHasPlayingMedia(layer *Layer) bool {
+	for _, w := range layer.Widgets {
+		w.mu.RLock()
+		kind := w.kind
+		playerID := w.videoPlayerID
+		state := w.videoState
+		textureID := w.videoTextureID
+		source := w.videoSource
+		w.mu.RUnlock()
+
+		if kind != KindVideo {
+			continue
+		}
+
+		isPlayingVideo := playerID != 0 && state == int32(ffi.VideoStatePlaying)
+		isStreamingVideo := source == "" && textureID != 0
+
+		if isPlayingVideo || isStreamingVideo {
+			return true
+		}
+	}
+	return false
+}
+
 // buildRenderCommands converts the tree + immediate draws to render commands.
 func (l *Loop) buildRenderCommands(frame *Frame, deltas map[WidgetID]*WidgetDelta) []ffi.RenderCommand {
 	var commands []ffi.RenderCommand
@@ -1310,6 +1719,43 @@ func (l *Loop) renderWidgetAt(commands []ffi.RenderCommand, w *Widget, parentX, 
 	if !w.visible {
 		w.mu.RUnlock()
 		return commands
+	}
+
+	// Early viewport rejection: skip widgets completely outside the visible area.
+	// This optimization avoids generating render commands for off-screen content.
+	if w.computedLayout.Valid {
+		wx, wy := w.computedLayout.X, w.computedLayout.Y
+		ww, wh := w.computedLayout.Width, w.computedLayout.Height
+		// Add a small margin to account for shadows/borders that extend beyond bounds
+		const margin float32 = 20
+
+		if len(l.scrollContextStack) == 0 {
+			// Outside scroll views: check against window viewport
+			if wx+ww+margin < 0 || wx-margin > l.windowWidth ||
+				wy+wh+margin < 0 || wy-margin > l.windowHeight {
+				w.mu.RUnlock()
+				w.updateBounds(wx, wy, ww, wh, frameNum)
+				return commands
+			}
+		} else {
+			// Inside scroll view: check against scroll view's visible viewport
+			// Account for the scroll offset when determining visibility
+			ctx := l.scrollContextStack[len(l.scrollContextStack)-1]
+
+			// Widget's visual position after scroll offset is applied:
+			// visualY = wy - scrollY (because Rust subtracts scrollY during rendering)
+			// We need to check if the visual position is within the scroll viewport
+			visualX := wx - ctx.scrollX
+			visualY := wy - ctx.scrollY
+
+			// Check if widget is outside the scroll view's visible area
+			if visualX+ww+margin < ctx.viewportX || visualX-margin > ctx.viewportX+ctx.viewportW ||
+				visualY+wh+margin < ctx.viewportY || visualY-margin > ctx.viewportY+ctx.viewportH {
+				w.mu.RUnlock()
+				w.updateBounds(wx, wy, ww, wh, frameNum)
+				return commands
+			}
+		}
 	}
 
 	// Use computed layout if available, otherwise fall back to legacy calculation
@@ -1585,12 +2031,13 @@ func (l *Loop) renderWidgetAt(commands []ffi.RenderCommand, w *Widget, parentX, 
 
 		// For TextArea, use word wrapping; for TextField, single line
 		if w.kind == KindTextArea {
-			// Calculate wrapped lines
-			lines := WrapText(displayText, contentWidth, w.fontSize, "system")
+			// Calculate wrapped lines (cached to avoid expensive line-breaking every frame)
+			cachedLayout := WrapTextCached(displayText, contentWidth, w.fontSize, "system", lineHeight)
+			lines := cachedLayout.Lines
+			totalTextHeight := cachedLayout.TotalHeight
 
 			// Calculate content dimensions
 			contentHeight := widgetHeight - w.padding[0] - w.padding[2]
-			totalTextHeight := float32(len(lines)) * lineHeight
 
 			// Find which row the cursor is on
 			cursorRow, cursorColX := CursorPositionInWrappedText(lines, cursorPos, w.fontSize, "system")
@@ -3901,4 +4348,83 @@ func (l *Loop) renderSelect(commands []ffi.RenderCommand, w *Widget, x, y, width
 	}
 
 	return commands
+}
+
+// ============================================================================
+// Dirty Region Tracking
+// ============================================================================
+
+// expandDirtyRegion expands the dirty region to include the given bounds.
+// If dirty is nil, creates a new region. The dirty region is the union of
+// the old and new bounds to cover both where content was and where it is now.
+func (l *Loop) expandDirtyRegion(oldBounds, newBounds Bounds) {
+	// Compute union of old and new bounds
+	minX := min(oldBounds.X, newBounds.X)
+	minY := min(oldBounds.Y, newBounds.Y)
+	maxX := max(oldBounds.X+oldBounds.Width, newBounds.X+newBounds.Width)
+	maxY := max(oldBounds.Y+oldBounds.Height, newBounds.Y+newBounds.Height)
+
+	widgetDirty := Bounds{
+		X:      minX,
+		Y:      minY,
+		Width:  maxX - minX,
+		Height: maxY - minY,
+	}
+
+	if l.dirtyRegion == nil {
+		l.dirtyRegion = &widgetDirty
+	} else {
+		// Expand existing dirty region to include this widget
+		l.dirtyRegion.ExpandToInclude(widgetDirty)
+	}
+}
+
+// resetDirtyRegion clears the dirty region for next frame.
+func (l *Loop) resetDirtyRegion() {
+	l.dirtyRegion = nil
+}
+
+// markWidgetDirty records that a widget has changed and updates the dirty region.
+func (l *Loop) markWidgetDirty(w *Widget) {
+	w.mu.RLock()
+	currentBounds := Bounds{
+		X:      w.computedLayout.X,
+		Y:      w.computedLayout.Y,
+		Width:  w.computedLayout.Width,
+		Height: w.computedLayout.Height,
+	}
+	previousBounds := w.previousBounds
+	w.mu.RUnlock()
+
+	// If previous bounds are zero (first frame), use current
+	if previousBounds.Width == 0 && previousBounds.Height == 0 {
+		previousBounds = currentBounds
+	}
+
+	l.expandDirtyRegion(previousBounds, currentBounds)
+}
+
+// savePreviousBounds saves current bounds as previous for next frame's dirty tracking.
+func (l *Loop) savePreviousBounds(w *Widget) {
+	w.mu.Lock()
+	w.previousBounds = Bounds{
+		X:      w.computedLayout.X,
+		Y:      w.computedLayout.Y,
+		Width:  w.computedLayout.Width,
+		Height: w.computedLayout.Height,
+	}
+	w.mu.Unlock()
+}
+
+// ExpandToInclude expands bounds to include another bounds.
+func (b *Bounds) ExpandToInclude(other Bounds) {
+	minX := min(b.X, other.X)
+	minY := min(b.Y, other.Y)
+	maxX := max(b.X+b.Width, other.X+other.Width)
+	maxY := max(b.Y+b.Height, other.Y+other.Height)
+
+	b.X = minX
+	b.Y = minY
+	b.Width = maxX - minX
+	b.Height = maxY - minY
 }

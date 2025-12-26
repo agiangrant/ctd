@@ -93,300 +93,337 @@ func applyStyleProperties(w *Widget, props *tw.StyleProperties) {
 		}
 	}
 
-	// Colors
-	if props.BackgroundColor != nil {
+	// Colors - only mark dirty if value actually changed
+	if props.BackgroundColor != nil && (w.backgroundColor == nil || *w.backgroundColor != *props.BackgroundColor) {
 		w.backgroundColor = props.BackgroundColor
 		w.dirtyMask |= DirtyBackground
 	}
-	if props.TextColor != nil {
+	if props.TextColor != nil && w.textColor != *props.TextColor {
 		w.textColor = *props.TextColor
 		w.dirtyMask |= DirtyText
 	}
-	if props.BorderColor != nil {
+	if props.BorderColor != nil && (w.borderColor == nil || *w.borderColor != *props.BorderColor) {
 		w.borderColor = props.BorderColor
 		w.dirtyMask |= DirtyBorder
 	}
 
-	// Typography
-	if props.FontFamily != nil {
-		// FontFamily stores the theme key (sans, serif, mono, etc.)
-		// The actual font name/path is resolved at render time via ThemeFonts()
+	// Typography - only mark dirty if value actually changed
+	if props.FontFamily != nil && w.fontFamily != *props.FontFamily {
 		w.fontFamily = *props.FontFamily
 		w.dirtyMask |= DirtyText
 	}
-	if props.FontSize != nil {
+	if props.FontSize != nil && w.fontSize != *props.FontSize {
 		w.fontSize = *props.FontSize
 		w.dirtyMask |= DirtyText
 	}
-	if props.LineHeight != nil {
+	if props.LineHeight != nil && w.lineHeight != *props.LineHeight {
 		w.lineHeight = *props.LineHeight
 		w.dirtyMask |= DirtyText
 	}
-	if props.TextAlign != nil {
+	if props.TextAlign != nil && w.textAlign != *props.TextAlign {
 		w.textAlign = *props.TextAlign
 		w.dirtyMask |= DirtyText
 	}
 
-	// Spacing - Padding
-	if props.PaddingTop != nil || props.PaddingRight != nil ||
-		props.PaddingBottom != nil || props.PaddingLeft != nil {
-		if props.PaddingTop != nil {
-			w.padding[0] = *props.PaddingTop
-		}
-		if props.PaddingRight != nil {
-			w.padding[1] = *props.PaddingRight
-		}
-		if props.PaddingBottom != nil {
-			w.padding[2] = *props.PaddingBottom
-		}
-		if props.PaddingLeft != nil {
-			w.padding[3] = *props.PaddingLeft
-		}
+	// Spacing - Padding - only mark dirty if values actually changed
+	if props.PaddingTop != nil && w.padding[0] != *props.PaddingTop {
+		w.padding[0] = *props.PaddingTop
+		w.dirtyMask |= DirtySize
+	}
+	if props.PaddingRight != nil && w.padding[1] != *props.PaddingRight {
+		w.padding[1] = *props.PaddingRight
+		w.dirtyMask |= DirtySize
+	}
+	if props.PaddingBottom != nil && w.padding[2] != *props.PaddingBottom {
+		w.padding[2] = *props.PaddingBottom
+		w.dirtyMask |= DirtySize
+	}
+	if props.PaddingLeft != nil && w.padding[3] != *props.PaddingLeft {
+		w.padding[3] = *props.PaddingLeft
 		w.dirtyMask |= DirtySize
 	}
 
-	// Sizing
-	if props.Width != nil {
+	// Sizing - only mark dirty if value actually changed
+	if props.Width != nil && w.width != *props.Width {
 		w.width = *props.Width
 		w.dirtyMask |= DirtySize
 	}
-	if props.Height != nil {
+	if props.Height != nil && w.height != *props.Height {
 		w.height = *props.Height
 		w.dirtyMask |= DirtySize
 	}
-	if props.MinWidth != nil {
+	if props.MinWidth != nil && (w.minWidth == nil || *w.minWidth != *props.MinWidth) {
 		w.minWidth = props.MinWidth
 		w.dirtyMask |= DirtySize
 	}
-	if props.MinHeight != nil {
+	if props.MinHeight != nil && (w.minHeight == nil || *w.minHeight != *props.MinHeight) {
 		w.minHeight = props.MinHeight
 		w.dirtyMask |= DirtySize
 	}
-	if props.MaxWidth != nil {
+	if props.MaxWidth != nil && (w.maxWidth == nil || *w.maxWidth != *props.MaxWidth) {
 		w.maxWidth = props.MaxWidth
 		w.dirtyMask |= DirtySize
 	}
-	if props.MaxHeight != nil {
+	if props.MaxHeight != nil && (w.maxHeight == nil || *w.maxHeight != *props.MaxHeight) {
 		w.maxHeight = props.MaxHeight
 		w.dirtyMask |= DirtySize
 	}
 
-	// Size modes for responsive/flex sizing
+	// Size modes for responsive/flex sizing - only mark dirty if value changed
 	if props.WidthMode != nil {
+		var newMode SizeMode
 		switch *props.WidthMode {
 		case "auto":
-			w.widthMode = SizeAuto
+			newMode = SizeAuto
 		case "full":
-			w.widthMode = SizeFull
+			newMode = SizeFull
 		case "percent":
-			w.widthMode = SizePercent
+			newMode = SizePercent
 		case "flex":
-			w.widthMode = SizeFlex
+			newMode = SizeFlex
 		default:
-			w.widthMode = SizeFixed
+			newMode = SizeFixed
 		}
-		w.dirtyMask |= DirtySize | DirtyLayout
+		if w.widthMode != newMode {
+			w.widthMode = newMode
+			w.dirtyMask |= DirtySize | DirtyLayout
+		}
 	}
 	if props.HeightMode != nil {
+		var newMode SizeMode
 		switch *props.HeightMode {
 		case "auto":
-			w.heightMode = SizeAuto
+			newMode = SizeAuto
 		case "full":
-			w.heightMode = SizeFull
+			newMode = SizeFull
 		case "percent":
-			w.heightMode = SizePercent
+			newMode = SizePercent
 		case "flex":
-			w.heightMode = SizeFlex
+			newMode = SizeFlex
 		default:
-			w.heightMode = SizeFixed
+			newMode = SizeFixed
 		}
-		w.dirtyMask |= DirtySize | DirtyLayout
+		if w.heightMode != newMode {
+			w.heightMode = newMode
+			w.dirtyMask |= DirtySize | DirtyLayout
+		}
 	}
-	if props.WidthPercent != nil {
+	if props.WidthPercent != nil && w.widthPercent != *props.WidthPercent {
 		w.widthPercent = *props.WidthPercent
 		w.dirtyMask |= DirtySize | DirtyLayout
 	}
-	if props.HeightPercent != nil {
+	if props.HeightPercent != nil && w.heightPercent != *props.HeightPercent {
 		w.heightPercent = *props.HeightPercent
 		w.dirtyMask |= DirtySize | DirtyLayout
 	}
 
 	// Layout - Gap
-	if props.Gap != nil {
+	if props.Gap != nil && w.gap != *props.Gap {
 		w.gap = *props.Gap
 		w.dirtyMask |= DirtySize
 	}
 
-	// Flexbox - container properties
+	// Flexbox - container properties - only mark dirty if value changed
 	if props.FlexDirection != nil {
+		var newDir FlexDirection
 		switch *props.FlexDirection {
 		case "row":
-			w.flexDirection = FlexRow
+			newDir = FlexRow
 		case "column":
-			w.flexDirection = FlexColumn
+			newDir = FlexColumn
 		case "row-reverse":
-			w.flexDirection = FlexRowReverse
+			newDir = FlexRowReverse
 		case "column-reverse":
-			w.flexDirection = FlexColumnReverse
+			newDir = FlexColumnReverse
 		}
-		w.dirtyMask |= DirtySize
+		if w.flexDirection != newDir {
+			w.flexDirection = newDir
+			w.dirtyMask |= DirtySize
+		}
 	}
 	if props.JustifyContent != nil {
+		var newJustify JustifyContent
 		switch *props.JustifyContent {
 		case "start":
-			w.justifyContent = JustifyStart
+			newJustify = JustifyStart
 		case "end":
-			w.justifyContent = JustifyEnd
+			newJustify = JustifyEnd
 		case "center":
-			w.justifyContent = JustifyCenter
+			newJustify = JustifyCenter
 		case "between":
-			w.justifyContent = JustifyBetween
+			newJustify = JustifyBetween
 		case "around":
-			w.justifyContent = JustifyAround
+			newJustify = JustifyAround
 		case "evenly":
-			w.justifyContent = JustifyEvenly
+			newJustify = JustifyEvenly
 		}
-		w.dirtyMask |= DirtySize
+		if w.justifyContent != newJustify {
+			w.justifyContent = newJustify
+			w.dirtyMask |= DirtySize
+		}
 	}
 	if props.AlignItems != nil {
+		var newAlign AlignItems
 		switch *props.AlignItems {
 		case "start":
-			w.alignItems = AlignStart
+			newAlign = AlignStart
 		case "end":
-			w.alignItems = AlignEnd
+			newAlign = AlignEnd
 		case "center":
-			w.alignItems = AlignCenter
+			newAlign = AlignCenter
 		case "stretch":
-			w.alignItems = AlignStretch
+			newAlign = AlignStretch
 		case "baseline":
-			w.alignItems = AlignBaseline
+			newAlign = AlignBaseline
 		}
-		w.dirtyMask |= DirtySize
+		if w.alignItems != newAlign {
+			w.alignItems = newAlign
+			w.dirtyMask |= DirtySize
+		}
 	}
 	if props.FlexWrap != nil {
+		var newWrap FlexWrap
 		switch *props.FlexWrap {
 		case "nowrap":
-			w.flexWrap = FlexNoWrap
+			newWrap = FlexNoWrap
 		case "wrap":
-			w.flexWrap = FlexWrapWrap
+			newWrap = FlexWrapWrap
 		case "wrap-reverse":
-			w.flexWrap = FlexWrapReverse
+			newWrap = FlexWrapReverse
 		}
-		w.dirtyMask |= DirtySize
+		if w.flexWrap != newWrap {
+			w.flexWrap = newWrap
+			w.dirtyMask |= DirtySize
+		}
 	}
 
-	// Flexbox - item properties
-	if props.FlexGrow != nil {
+	// Flexbox - item properties - only mark dirty if value changed
+	if props.FlexGrow != nil && w.flexGrow != *props.FlexGrow {
 		w.flexGrow = *props.FlexGrow
 		w.dirtyMask |= DirtySize
 	}
-	if props.FlexShrink != nil {
+	if props.FlexShrink != nil && w.flexShrink != *props.FlexShrink {
 		w.flexShrink = *props.FlexShrink
 		w.dirtyMask |= DirtySize
 	}
-	if props.FlexBasis != nil {
+	if props.FlexBasis != nil && (w.flexBasis == nil || *w.flexBasis != *props.FlexBasis) {
 		w.flexBasis = props.FlexBasis
 		w.dirtyMask |= DirtySize
 	}
 	if props.FlexBasisMode != nil {
+		var newMode FlexBasisMode
 		switch *props.FlexBasisMode {
 		case "auto":
-			w.flexBasisMode = FlexBasisAuto
+			newMode = FlexBasisAuto
 		case "fixed":
-			w.flexBasisMode = FlexBasisFixed
+			newMode = FlexBasisFixed
 		case "percent":
-			w.flexBasisMode = FlexBasisPercent
+			newMode = FlexBasisPercent
 		case "full":
-			w.flexBasisMode = FlexBasisFull
+			newMode = FlexBasisFull
 		}
-		w.dirtyMask |= DirtySize
+		if w.flexBasisMode != newMode {
+			w.flexBasisMode = newMode
+			w.dirtyMask |= DirtySize
+		}
 	}
-	if props.FlexBasisPercent != nil {
+	if props.FlexBasisPercent != nil && w.flexBasisPercent != *props.FlexBasisPercent {
 		w.flexBasisPercent = *props.FlexBasisPercent
 		w.dirtyMask |= DirtySize
 	}
 	if props.AlignSelf != nil {
+		var newAlign AlignSelf
 		switch *props.AlignSelf {
 		case "auto":
-			w.alignSelf = AlignSelfAuto
+			newAlign = AlignSelfAuto
 		case "start":
-			w.alignSelf = AlignSelfStart
+			newAlign = AlignSelfStart
 		case "end":
-			w.alignSelf = AlignSelfEnd
+			newAlign = AlignSelfEnd
 		case "center":
-			w.alignSelf = AlignSelfCenter
+			newAlign = AlignSelfCenter
 		case "stretch":
-			w.alignSelf = AlignSelfStretch
+			newAlign = AlignSelfStretch
 		case "baseline":
-			w.alignSelf = AlignSelfBaseline
+			newAlign = AlignSelfBaseline
 		}
-		w.dirtyMask |= DirtySize
+		if w.alignSelf != newAlign {
+			w.alignSelf = newAlign
+			w.dirtyMask |= DirtySize
+		}
 	}
-	if props.Order != nil {
+	if props.Order != nil && w.order != *props.Order {
 		w.order = *props.Order
 		w.dirtyMask |= DirtySize
 	}
 
-	// Position
+	// Position - only mark dirty if value changed
 	if props.Position != nil {
+		var newPos Position
 		switch *props.Position {
 		case "relative":
-			w.position = PositionRelative
+			newPos = PositionRelative
 		case "absolute":
-			w.position = PositionAbsolute
+			newPos = PositionAbsolute
 		case "fixed":
-			w.position = PositionFixed
+			newPos = PositionFixed
 		case "sticky":
-			w.position = PositionSticky
+			newPos = PositionSticky
 		default:
-			w.position = PositionStatic
+			newPos = PositionStatic
 		}
-		w.dirtyMask |= DirtyPosition
+		if w.position != newPos {
+			w.position = newPos
+			w.dirtyMask |= DirtyPosition
+		}
 	}
-	if props.Top != nil {
+	if props.Top != nil && (w.posTop == nil || *w.posTop != *props.Top) {
 		val := *props.Top
 		w.posTop = &val
 		w.dirtyMask |= DirtyPosition
 	}
-	if props.Right != nil {
+	if props.Right != nil && (w.posRight == nil || *w.posRight != *props.Right) {
 		val := *props.Right
 		w.posRight = &val
 		w.dirtyMask |= DirtyPosition
 	}
-	if props.Bottom != nil {
+	if props.Bottom != nil && (w.posBottom == nil || *w.posBottom != *props.Bottom) {
 		val := *props.Bottom
 		w.posBottom = &val
 		w.dirtyMask |= DirtyPosition
 	}
-	if props.Left != nil {
+	if props.Left != nil && (w.posLeft == nil || *w.posLeft != *props.Left) {
 		val := *props.Left
 		w.posLeft = &val
 		w.dirtyMask |= DirtyPosition
 	}
-	if props.ZIndex != nil {
+	if props.ZIndex != nil && w.zIndex != *props.ZIndex {
 		w.zIndex = *props.ZIndex
 		w.dirtyMask |= DirtyPosition
 	}
 
-	// Borders
-	if props.BorderWidth != nil {
+	// Borders - only mark dirty if value changed
+	if props.BorderWidth != nil && w.borderWidth != *props.BorderWidth {
 		w.borderWidth = *props.BorderWidth
 		w.dirtyMask |= DirtyBorder
 	}
 	if props.BorderRadius != nil {
 		radius := *props.BorderRadius
-		w.cornerRadius = [4]float32{radius, radius, radius, radius}
-		w.dirtyMask |= DirtyBorder
+		newRadius := [4]float32{radius, radius, radius, radius}
+		if w.cornerRadius != newRadius {
+			w.cornerRadius = newRadius
+			w.dirtyMask |= DirtyBorder
+		}
 	}
 
-	// Effects
-	if props.Opacity != nil {
+	// Effects - only mark dirty if value changed
+	if props.Opacity != nil && w.opacity != *props.Opacity {
 		w.opacity = *props.Opacity
 		w.dirtyMask |= DirtyBackground
 	}
 
-	// Overflow
-	if props.OverflowX != nil {
+	// Overflow - only mark dirty if value changed
+	if props.OverflowX != nil && w.overflowX != *props.OverflowX {
 		w.overflowX = *props.OverflowX
 		// Enable scroll for scroll/auto modes
 		if *props.OverflowX == "scroll" || *props.OverflowX == "auto" {
@@ -394,7 +431,7 @@ func applyStyleProperties(w *Widget, props *tw.StyleProperties) {
 		}
 		w.dirtyMask |= DirtyScroll
 	}
-	if props.OverflowY != nil {
+	if props.OverflowY != nil && w.overflowY != *props.OverflowY {
 		w.overflowY = *props.OverflowY
 		// Enable scroll for scroll/auto modes
 		if *props.OverflowY == "scroll" || *props.OverflowY == "auto" {
@@ -403,12 +440,12 @@ func applyStyleProperties(w *Widget, props *tw.StyleProperties) {
 		w.dirtyMask |= DirtyScroll
 	}
 
-	// Object fit and position (for images)
-	if props.ObjectFit != nil {
+	// Object fit and position (for images) - only mark dirty if value changed
+	if props.ObjectFit != nil && w.imageFit != *props.ObjectFit {
 		w.imageFit = *props.ObjectFit
 		w.dirtyMask |= DirtySize
 	}
-	if props.ObjectPosition != nil {
+	if props.ObjectPosition != nil && w.imagePosition != *props.ObjectPosition {
 		w.imagePosition = *props.ObjectPosition
 		w.dirtyMask |= DirtySize
 	}

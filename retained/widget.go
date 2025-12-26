@@ -202,7 +202,8 @@ type Widget struct {
 
 	// Computed layout (cached, recomputed when layoutDirty)
 	computedLayout ComputedLayout
-	layoutDirty    bool // True when layout needs recomputation
+	previousBounds Bounds  // Bounds from last frame, for dirty region calculation
+	layoutDirty    bool    // True when layout needs recomputation
 
 	// Spacing
 	padding [4]float32 // [top, right, bottom, left]
