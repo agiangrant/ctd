@@ -47,6 +47,13 @@ func CreateAndroid(args []string) error {
 		MinSDK:      config.Android.MinSDK,
 		TargetSDK:   config.Android.TargetSDK,
 		Version:     config.App.Version,
+
+		Camera:     config.Permissions.Camera,
+		Microphone: config.Permissions.Microphone,
+		Location:   config.Permissions.Location,
+		Bluetooth:  config.Permissions.Bluetooth,
+		Network:    config.Permissions.Network,
+		FileAccess: config.Permissions.FileAccess,
 	}
 
 	// Create directory structure
@@ -108,6 +115,14 @@ type AndroidTemplateData struct {
 	MinSDK      int
 	TargetSDK   int
 	Version     string
+
+	// Permissions
+	Camera       bool
+	Microphone   bool
+	Location     bool
+	Bluetooth    bool
+	Network      bool
+	FileAccess   bool
 }
 
 // Android project templates
@@ -191,8 +206,20 @@ const androidManifestTemplate = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
-    <uses-permission android:name="android.permission.INTERNET" />
-
+{{if .Network}}    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+{{end}}{{if .Camera}}    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+{{end}}{{if .Microphone}}    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+{{end}}{{if .Location}}    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+{{end}}{{if .Bluetooth}}    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+{{end}}{{if .FileAccess}}    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+{{end}}
     <application
         android:label="{{.AppName}}"
         android:hasCode="true"
@@ -315,7 +342,7 @@ android/
 
 ## Configuration
 
-Edit ` + "`centered.toml`" + ` in your project root to configure:
+Edit ` + "`ctd.toml`" + ` in your project root to configure:
 
 ` + "```toml" + `
 [android]

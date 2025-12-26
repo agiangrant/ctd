@@ -50,15 +50,15 @@ func generateOnce(themeFile, outputDir string) error {
 	// For now, provide a helpful message
 	fmt.Println("To generate Tailwind styles, ensure you have:")
 	fmt.Println("  1. A theme.toml file in your project root (optional)")
-	fmt.Println("  2. Run: go run github.com/anthropics/centered/tools/generate")
+	fmt.Println("  2. Run: go run github.com/agiangrant/ctd/tools/generate")
 	fmt.Println("")
 	fmt.Printf("Output directory: %s\n", outputDir)
 
-	// Check if the user has the centered module
+	// Check if the user has the ctd module
 	goModPath := "go.mod"
 	if _, err := os.Stat(goModPath); err == nil {
 		// They have a go.mod, try running the generator from the module
-		cmd := exec.Command("go", "run", "github.com/anthropics/centered/tools/generate")
+		cmd := exec.Command("go", "run", "github.com/agiangrant/ctd/tools/generate")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -144,6 +144,6 @@ func GetGeneratorPath() (string, error) {
 	}
 
 	// Check if installed globally
-	// This would be the case after `go install github.com/anthropics/centered/tools/generate@latest`
-	return "", fmt.Errorf("generator not found - run: go install github.com/anthropics/centered/tools/generate@latest")
+	// This would be the case after `go install github.com/agiangrant/ctd/tools/generate@latest`
+	return "", fmt.Errorf("generator not found - run: go install github.com/agiangrant/ctd/tools/generate@latest")
 }

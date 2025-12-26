@@ -38,6 +38,28 @@ func CreateIOS(args []string) error {
 
 	fmt.Printf("Creating iOS project for %s...\n", appName)
 
+	// Build usage descriptions with defaults
+	cameraUsage := config.Permissions.CameraUsage
+	if cameraUsage == "" && config.Permissions.Camera {
+		cameraUsage = "This app needs camera access"
+	}
+	microphoneUsage := config.Permissions.MicrophoneUsage
+	if microphoneUsage == "" && config.Permissions.Microphone {
+		microphoneUsage = "This app needs microphone access"
+	}
+	photoLibraryUsage := config.Permissions.PhotoLibraryUsage
+	if photoLibraryUsage == "" && config.Permissions.PhotoLibrary {
+		photoLibraryUsage = "This app needs photo library access"
+	}
+	locationUsage := config.Permissions.LocationUsage
+	if locationUsage == "" && config.Permissions.Location {
+		locationUsage = "This app needs your location"
+	}
+	bluetoothUsage := config.Permissions.BluetoothUsage
+	if bluetoothUsage == "" && config.Permissions.Bluetooth {
+		bluetoothUsage = "This app needs Bluetooth access"
+	}
+
 	// Template data
 	data := IOSTemplateData{
 		AppName:          appName,
@@ -46,6 +68,21 @@ func CreateIOS(args []string) error {
 		DeploymentTarget: config.IOS.DeploymentTarget,
 		DevelopmentTeam:  config.IOS.DevelopmentTeam,
 		Version:          config.App.Version,
+		Category:         config.IOS.Category,
+		DeviceFamily:     config.IOS.DeviceFamily,
+
+		Camera:       config.Permissions.Camera,
+		Microphone:   config.Permissions.Microphone,
+		PhotoLibrary: config.Permissions.PhotoLibrary,
+		Location:     config.Permissions.Location,
+		Bluetooth:    config.Permissions.Bluetooth,
+		Notifications: config.Permissions.Notifications,
+
+		CameraUsage:       cameraUsage,
+		MicrophoneUsage:   microphoneUsage,
+		PhotoLibraryUsage: photoLibraryUsage,
+		LocationUsage:     locationUsage,
+		BluetoothUsage:    bluetoothUsage,
 	}
 
 	// Create directory structure
@@ -97,6 +134,23 @@ type IOSTemplateData struct {
 	DeploymentTarget string
 	DevelopmentTeam  string
 	Version          string
+	Category         string
+	DeviceFamily     string
+
+	// Permissions
+	Camera           bool
+	Microphone       bool
+	PhotoLibrary     bool
+	Location         bool
+	Bluetooth        bool
+	Notifications    bool
+
+	// Usage descriptions
+	CameraUsage       string
+	MicrophoneUsage   string
+	PhotoLibraryUsage string
+	LocationUsage     string
+	BluetoothUsage    string
 }
 
 func writeTemplate(path, tmplStr string, data interface{}) error {
@@ -151,13 +205,17 @@ const iosInfoPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<string>UIStatusBarStyleDefault</string>
 	<key>UILaunchStoryboardName</key>
 	<string></string>
-	<key>NSCameraUsageDescription</key>
-	<string>This app needs camera access for video capture</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>This app needs microphone access for audio recording</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>This app needs photo library access to save media</string>
-</dict>
+{{if .Camera}}	<key>NSCameraUsageDescription</key>
+	<string>{{.CameraUsage}}</string>
+{{end}}{{if .Microphone}}	<key>NSMicrophoneUsageDescription</key>
+	<string>{{.MicrophoneUsage}}</string>
+{{end}}{{if .PhotoLibrary}}	<key>NSPhotoLibraryUsageDescription</key>
+	<string>{{.PhotoLibraryUsage}}</string>
+{{end}}{{if .Location}}	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>{{.LocationUsage}}</string>
+{{end}}{{if .Bluetooth}}	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>{{.BluetoothUsage}}</string>
+{{end}}</dict>
 </plist>
 `
 
@@ -294,7 +352,7 @@ ios/
 
 ## Configuration
 
-Edit ` + "`centered.toml`" + ` in your project root to configure:
+Edit ` + "`ctd.toml`" + ` in your project root to configure:
 
 ` + "```toml" + `
 [ios]
