@@ -6,8 +6,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -15,16 +15,16 @@ func init() {
 }
 
 func main() {
-	config := retained.DefaultLoopConfig()
+	config := ctd.DefaultLoopConfig()
 	// Start with system preference (default)
-	config.ColorScheme = retained.ColorSchemeSystem
+	config.ColorScheme = ctd.ColorSchemeSystem
 
-	loop := retained.NewLoop(config)
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 
 	// Status label to show current mode
-	var statusLabel *retained.Widget
-	var modeLabel *retained.Widget
+	var statusLabel *ctd.Widget
+	var modeLabel *ctd.Widget
 
 	root := buildUI(loop, &statusLabel, &modeLabel)
 	tree.SetRoot(root)
@@ -52,17 +52,17 @@ func main() {
 			// 1 = System, 2 = Light, 3 = Dark
 			switch keycode {
 			case uint32(ffi.Key1):
-				loop.SetColorScheme(retained.ColorSchemeSystem)
+				loop.SetColorScheme(ctd.ColorSchemeSystem)
 				updateModeLabel(modeLabel, loop)
 				statusLabel.SetText("Switched to System preference")
 				return true
 			case uint32(ffi.Key2):
-				loop.SetColorScheme(retained.ColorSchemeLight)
+				loop.SetColorScheme(ctd.ColorSchemeLight)
 				updateModeLabel(modeLabel, loop)
 				statusLabel.SetText("Switched to Light mode")
 				return true
 			case uint32(ffi.Key3):
-				loop.SetColorScheme(retained.ColorSchemeDark)
+				loop.SetColorScheme(ctd.ColorSchemeDark)
 				updateModeLabel(modeLabel, loop)
 				statusLabel.SetText("Switched to Dark mode")
 				return true
@@ -78,11 +78,11 @@ func main() {
 	})
 
 	// Frame callback
-	loop.OnFrame(func(frame *retained.Frame) {
+	loop.OnFrame(func(frame *ctd.Frame) {
 		fps := 1.0 / frame.DeltaTime
 		frame.DrawText(
 			fmt.Sprintf("FPS: %.1f", fps),
-			float32(550), 10, 14, retained.ColorWhite,
+			float32(550), 10, 14, ctd.ColorWhite,
 		)
 	})
 
@@ -102,12 +102,12 @@ func main() {
 	}
 }
 
-func updateModeLabel(label *retained.Widget, loop *retained.Loop) {
+func updateModeLabel(label *ctd.Widget, loop *ctd.Loop) {
 	schemeStr := "System"
 	switch loop.ColorScheme() {
-	case retained.ColorSchemeLight:
+	case ctd.ColorSchemeLight:
 		schemeStr = "Light"
-	case retained.ColorSchemeDark:
+	case ctd.ColorSchemeDark:
 		schemeStr = "Dark"
 	}
 
@@ -119,65 +119,65 @@ func updateModeLabel(label *retained.Widget, loop *retained.Loop) {
 	label.SetText(fmt.Sprintf("Scheme: %s | Dark Mode: %s", schemeStr, darkStr))
 }
 
-func buildUI(loop *retained.Loop, statusLabel, modeLabel **retained.Widget) *retained.Widget {
+func buildUI(loop *ctd.Loop, statusLabel, modeLabel **ctd.Widget) *ctd.Widget {
 	// Root container - uses dark: variant for automatic switching
 	// bg-gray-100 in light mode, bg-gray-900 in dark mode
-	root := retained.Container("bg-gray-100 dark:bg-gray-900").
+	root := ctd.Container("bg-gray-100 dark:bg-gray-900").
 		WithSize(700, 500)
 
 	// Header panel - demonstrates dark: variant colors
-	headerText := retained.Text("Dark Mode Demo", "text-2xl text-gray-900 dark:text-white")
+	headerText := ctd.Text("Dark Mode Demo", "text-2xl text-gray-900 dark:text-white")
 
-	header := retained.HStack("p-4 bg-gray-200 dark:bg-gray-800",
+	header := ctd.HStack("p-4 bg-gray-200 dark:bg-gray-800",
 		headerText,
 	)
 
 	// Mode display - text color changes with dark mode
-	mode := retained.Text("", "text-sm text-gray-600 dark:text-gray-300")
+	mode := ctd.Text("", "text-sm text-gray-600 dark:text-gray-300")
 	*modeLabel = mode
 
 	// Status display
-	status := retained.Text("Press 1/2/3 to change color scheme", "text-sm text-gray-500 dark:text-gray-400")
+	status := ctd.Text("Press 1/2/3 to change color scheme", "text-sm text-gray-500 dark:text-gray-400")
 	*statusLabel = status
 
 	// Demo cards showing light/dark styling
-	cardsPanel := retained.HStack("w-full gap-4 p-4")
+	cardsPanel := ctd.HStack("w-full gap-4 p-4")
 
 	// Card 1 - Adaptive card (changes with dark mode)
-	card1 := retained.VStack("flex-1 gap-2 p-4 rounded-lg bg-white dark:bg-gray-700")
-	card1Title := retained.Text("Adaptive Card", "text-base text-gray-900 dark:text-white")
-	card1Body := retained.Text("This card adapts to light/dark mode automatically.", "text-xs text-gray-600 dark:text-gray-300")
+	card1 := ctd.VStack("flex-1 gap-2 p-4 rounded-lg bg-white dark:bg-gray-700")
+	card1Title := ctd.Text("Adaptive Card", "text-base text-gray-900 dark:text-white")
+	card1Body := ctd.Text("This card adapts to light/dark mode automatically.", "text-xs text-gray-600 dark:text-gray-300")
 	card1.WithChildren(card1Title, card1Body)
 
 	// Card 2 - Always dark card (no dark: variants, just dark colors)
-	card2 := retained.VStack("flex-1 gap-2 p-4 rounded-lg bg-gray-800")
-	card2Title := retained.Text("Dark Card", "text-base text-white")
-	card2Body := retained.Text("This card is always dark themed.", "text-xs text-gray-400")
+	card2 := ctd.VStack("flex-1 gap-2 p-4 rounded-lg bg-gray-800")
+	card2Title := ctd.Text("Dark Card", "text-base text-white")
+	card2Body := ctd.Text("This card is always dark themed.", "text-xs text-gray-400")
 	card2.WithChildren(card2Title, card2Body)
 
 	// Card 3 - Accent card (blue that shifts shade in dark mode)
-	card3 := retained.VStack("flex-1 gap-2 p-4 rounded-lg bg-blue-500 dark:bg-blue-700")
-	card3Title := retained.Text("Accent Card", "text-base text-white")
-	card3Body := retained.Text("Blue accent shifts in dark mode.", "text-xs text-blue-100 dark:text-blue-200")
+	card3 := ctd.VStack("flex-1 gap-2 p-4 rounded-lg bg-blue-500 dark:bg-blue-700")
+	card3Title := ctd.Text("Accent Card", "text-base text-white")
+	card3Body := ctd.Text("Blue accent shifts in dark mode.", "text-xs text-blue-100 dark:text-blue-200")
 	card3.WithChildren(card3Title, card3Body)
 
 	cardsPanel.WithChildren(card1, card2, card3)
 
 	// Instructions panel
-	instructionsTitle := retained.Text("Keyboard Controls:", "text-sm text-gray-700 dark:text-gray-300")
-	inst1 := retained.Text("  1 - System (follow OS)", "text-xs text-gray-500 dark:text-gray-400")
-	inst2 := retained.Text("  2 - Force Light mode", "text-xs text-gray-500 dark:text-gray-400")
-	inst3 := retained.Text("  3 - Force Dark mode", "text-xs text-gray-500 dark:text-gray-400")
-	inst4 := retained.Text("  R - Refresh system preference", "text-xs text-gray-500 dark:text-gray-400")
-	inst5 := retained.Text("  ESC - Quit", "text-xs text-gray-500 dark:text-gray-400")
+	instructionsTitle := ctd.Text("Keyboard Controls:", "text-sm text-gray-700 dark:text-gray-300")
+	inst1 := ctd.Text("  1 - System (follow OS)", "text-xs text-gray-500 dark:text-gray-400")
+	inst2 := ctd.Text("  2 - Force Light mode", "text-xs text-gray-500 dark:text-gray-400")
+	inst3 := ctd.Text("  3 - Force Dark mode", "text-xs text-gray-500 dark:text-gray-400")
+	inst4 := ctd.Text("  R - Refresh system preference", "text-xs text-gray-500 dark:text-gray-400")
+	inst5 := ctd.Text("  ESC - Quit", "text-xs text-gray-500 dark:text-gray-400")
 
-	instructions := retained.VStack("gap-1 p-4",
+	instructions := ctd.VStack("gap-1 p-4",
 		instructionsTitle,
 		inst1, inst2, inst3, inst4, inst5,
 	)
 
 	// Main layout
-	mainLayout := retained.VStack("flex-1 gap-4")
+	mainLayout := ctd.VStack("flex-1 gap-4")
 	mainLayout.WithChildren(header, mode, status, cardsPanel, instructions)
 
 	root.WithChildren(mainLayout)

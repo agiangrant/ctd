@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -28,8 +28,8 @@ func init() {
 
 func main() {
 	// Create the game loop
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 
 	// Build the UI demonstrating different font families
 	root := buildUI()
@@ -66,44 +66,44 @@ func main() {
 	}
 }
 
-func buildUI() *retained.Widget {
-	return retained.VStack("flex-1 bg-gray-900",
+func buildUI() *ctd.Widget {
+	return ctd.VStack("flex-1 bg-gray-900",
 		// Header
-		retained.Text("Font Bundle Example", "text-4xl font-bold text-white p-8"),
+		ctd.Text("Font Bundle Example", "text-4xl font-bold text-white p-8"),
 
 		// Container with font examples
-		retained.VStack("p-8 gap-4",
+		ctd.VStack("p-8 gap-4",
 			// System sans-serif (default)
-			retained.VStack("bg-gray-800 w-full rounded-lg p-6 mb-4",
-				retained.Text("font-sans (System Default)", "text-sm text-gray-400 mb-2"),
-				retained.Text("The quick brown fox jumps over the lazy dog.", "text-2xl text-white font-sans"),
+			ctd.VStack("bg-gray-800 w-full rounded-lg p-6 mb-4",
+				ctd.Text("font-sans (System Default)", "text-sm text-gray-400 mb-2"),
+				ctd.Text("The quick brown fox jumps over the lazy dog.", "text-2xl text-white font-sans"),
 			),
 
 			// Bundled serif font
-			retained.VStack("bg-gray-800 w-full rounded-lg p-6 mb-4",
-				retained.Text("font-serif (Bundled: example.ttf)", "text-sm text-gray-400 mb-2"),
-				retained.Text("The quick brown fox jumps over the lazy dog.", "text-2xl text-white font-serif"),
+			ctd.VStack("bg-gray-800 w-full rounded-lg p-6 mb-4",
+				ctd.Text("font-serif (Bundled: example.ttf)", "text-sm text-gray-400 mb-2"),
+				ctd.Text("The quick brown fox jumps over the lazy dog.", "text-2xl text-white font-serif"),
 			),
 
 			// System monospace
-			retained.VStack("bg-gray-800 w-full rounded-lg p-6 mb-4",
-				retained.Text("font-mono (System: Menlo)", "text-sm text-gray-400 mb-2"),
-				retained.Text("The quick brown fox jumps over the lazy dog.", "text-2xl text-white font-mono"),
+			ctd.VStack("bg-gray-800 w-full rounded-lg p-6 mb-4",
+				ctd.Text("font-mono (System: Menlo)", "text-sm text-gray-400 mb-2"),
+				ctd.Text("The quick brown fox jumps over the lazy dog.", "text-2xl text-white font-mono"),
 			),
 
 			// Comparison side by side
-			retained.HStack("bg-gray-800 rounded-lg p-6 gap-4 w-full",
-				retained.VStack("flex-1 items-center",
-					retained.Text("Sans", "text-sm text-gray-500"),
-					retained.Text("ABC abc 123", "text-3xl text-blue-400 font-sans"),
+			ctd.HStack("bg-gray-800 rounded-lg p-6 gap-4 w-full",
+				ctd.VStack("flex-1 items-center",
+					ctd.Text("Sans", "text-sm text-gray-500"),
+					ctd.Text("ABC abc 123", "text-3xl text-blue-400 font-sans"),
 				),
-				retained.VStack("flex-1 items-center",
-					retained.Text("Serif (Bundled)", "text-sm text-gray-500"),
-					retained.Text("ABC abc 123", "text-3xl text-green-400 font-serif"),
+				ctd.VStack("flex-1 items-center",
+					ctd.Text("Serif (Bundled)", "text-sm text-gray-500"),
+					ctd.Text("ABC abc 123", "text-3xl text-green-400 font-serif"),
 				),
-				retained.VStack("flex-1 items-center",
-					retained.Text("Mono", "text-sm text-gray-500"),
-					retained.Text("ABC abc 123", "text-3xl text-purple-400 font-mono"),
+				ctd.VStack("flex-1 items-center",
+					ctd.Text("Mono", "text-sm text-gray-500"),
+					ctd.Text("ABC abc 123", "text-3xl text-purple-400 font-mono"),
 				),
 			),
 		),

@@ -1,9 +1,9 @@
-package retained
+package ctd
 
 import (
 	"sync"
 
-	"github.com/agiangrant/centered/tw"
+	"github.com/agiangrant/ctd/tw"
 )
 
 // styleCache caches parsed styles for repeated class strings.

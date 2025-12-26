@@ -7,8 +7,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -16,61 +16,61 @@ func init() {
 }
 
 func main() {
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 
 	// State for UI updates
-	var micLevelBar *retained.Widget
-	var statusText *retained.Widget
-	var micDeviceText *retained.Widget
-	var camDeviceText *retained.Widget
-	var cameraPreview *retained.Widget
-	var micWidget *retained.Widget
-	var camWidget *retained.Widget
+	var micLevelBar *ctd.Widget
+	var statusText *ctd.Widget
+	var micDeviceText *ctd.Widget
+	var camDeviceText *ctd.Widget
+	var cameraPreview *ctd.Widget
+	var micWidget *ctd.Widget
+	var camWidget *ctd.Widget
 
 	// Build the UI
-	root := retained.VStack("flex-1 p-6 bg-gray-900",
+	root := ctd.VStack("flex-1 p-6 bg-gray-900",
 		// Title
-		retained.Text("Media Input Demo", "text-2xl font-bold text-white mb-4"),
+		ctd.Text("Media Input Demo", "text-2xl font-bold text-white mb-4"),
 
 		// Device lists section
-		retained.HStack("w-full mb-4",
+		ctd.HStack("w-full mb-4",
 			// Microphone devices panel
-			retained.VStack("flex-1 p-4 bg-gray-800 rounded-lg mr-2",
-				retained.Text("Microphones", "text-lg font-semibold text-white mb-2"),
+			ctd.VStack("flex-1 p-4 bg-gray-800 rounded-lg mr-2",
+				ctd.Text("Microphones", "text-lg font-semibold text-white mb-2"),
 				buildDeviceText(&micDeviceText),
 			),
 
 			// Camera devices panel
-			retained.VStack("flex-1 p-4 bg-gray-800 rounded-lg ml-2",
-				retained.Text("Cameras", "text-lg font-semibold text-white mb-2"),
+			ctd.VStack("flex-1 p-4 bg-gray-800 rounded-lg ml-2",
+				ctd.Text("Cameras", "text-lg font-semibold text-white mb-2"),
 				buildDeviceText(&camDeviceText),
 			),
 		),
 
 		// Microphone section
-		retained.VStack("w-full p-4 bg-gray-800 rounded-lg mb-4",
-			retained.Text("Microphone", "text-lg font-semibold text-white mb-2"),
+		ctd.VStack("w-full p-4 bg-gray-800 rounded-lg mb-4",
+			ctd.Text("Microphone", "text-lg font-semibold text-white mb-2"),
 
 			// Audio level visualization
-			retained.HStack("items-center mb-2",
-				retained.Text("Level:", "text-white mr-2"),
+			ctd.HStack("items-center mb-2",
+				ctd.Text("Level:", "text-white mr-2"),
 				buildLevelBar(&micLevelBar),
 			),
 
 			// Start/Stop buttons
-			retained.HStack("gap-2 mb-2",
-				retained.Button("Start Mic", "px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded").
-					OnClick(func(e *retained.MouseEvent) {
+			ctd.HStack("gap-2 mb-2",
+				ctd.Button("Start Mic", "px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded").
+					OnClick(func(e *ctd.MouseEvent) {
 						if micWidget != nil {
 							if err := micWidget.MicrophoneStart(); err != nil {
 								log.Printf("Failed to start microphone: %v", err)
 							}
 						}
 					}),
-				retained.Button("Stop Mic", "px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded").
-					OnClick(func(e *retained.MouseEvent) {
+				ctd.Button("Stop Mic", "px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded").
+					OnClick(func(e *ctd.MouseEvent) {
 						if micWidget != nil {
 							if err := micWidget.MicrophoneStop(); err != nil {
 								log.Printf("Failed to stop microphone: %v", err)
@@ -84,24 +84,24 @@ func main() {
 		),
 
 		// Camera section
-		retained.VStack("w-full p-4 bg-gray-800 rounded-lg mb-4",
-			retained.Text("Camera", "text-lg font-semibold text-white mb-2"),
+		ctd.VStack("w-full p-4 bg-gray-800 rounded-lg mb-4",
+			ctd.Text("Camera", "text-lg font-semibold text-white mb-2"),
 
 			// Camera preview display (Video widget receives frames from Camera)
 			buildCameraPreview(&cameraPreview),
 
 			// Start/Stop buttons
-			retained.HStack("gap-2 mt-2 mb-2",
-				retained.Button("Start Camera", "px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded").
-					OnClick(func(e *retained.MouseEvent) {
+			ctd.HStack("gap-2 mt-2 mb-2",
+				ctd.Button("Start Camera", "px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded").
+					OnClick(func(e *ctd.MouseEvent) {
 						if camWidget != nil {
 							if err := camWidget.CameraStart(); err != nil {
 								log.Printf("Failed to start camera: %v", err)
 							}
 						}
 					}),
-				retained.Button("Stop Camera", "px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded").
-					OnClick(func(e *retained.MouseEvent) {
+				ctd.Button("Stop Camera", "px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded").
+					OnClick(func(e *ctd.MouseEvent) {
 						if camWidget != nil {
 							if err := camWidget.CameraStop(); err != nil {
 								log.Printf("Failed to stop camera: %v", err)
@@ -115,15 +115,15 @@ func main() {
 		),
 
 		// Status section
-		retained.VStack("w-full p-4 bg-gray-700 rounded-lg",
+		ctd.VStack("w-full p-4 bg-gray-700 rounded-lg",
 			buildStatusText(&statusText),
 		),
 
 		// Spacer to push content up (use flex-1 Container as spacer)
-		retained.Container("flex-1"),
+		ctd.Container("flex-1"),
 
 		// Help text
-		retained.Text("Press ESC to quit", "text-gray-400 text-sm"),
+		ctd.Text("Press ESC to quit", "text-gray-400 text-sm"),
 	)
 
 	tree.SetRoot(root)
@@ -131,7 +131,7 @@ func main() {
 	// Load device lists asynchronously
 	go func() {
 		// List microphone devices
-		micDevices, err := retained.ListMicrophoneDevices()
+		micDevices, err := ctd.ListMicrophoneDevices()
 		if err != nil {
 			log.Printf("Error listing microphones: %v", err)
 		} else {
@@ -152,7 +152,7 @@ func main() {
 		}
 
 		// List camera devices
-		camDevices, err := retained.ListCameraDevices()
+		camDevices, err := ctd.ListCameraDevices()
 		if err != nil {
 			log.Printf("Error listing cameras: %v", err)
 		} else {
@@ -203,11 +203,11 @@ func main() {
 }
 
 // buildLevelBar creates the audio level visualization bar
-func buildLevelBar(ref **retained.Widget) *retained.Widget {
-	levelBar := retained.Container("w-2 h-4 bg-green-500 rounded")
+func buildLevelBar(ref **ctd.Widget) *ctd.Widget {
+	levelBar := ctd.Container("w-2 h-4 bg-green-500 rounded")
 	*ref = levelBar
 
-	container := retained.HStack("w-52 h-4 bg-gray-600 rounded overflow-hidden",
+	container := ctd.HStack("w-52 h-4 bg-gray-600 rounded overflow-hidden",
 		levelBar,
 	)
 
@@ -215,29 +215,29 @@ func buildLevelBar(ref **retained.Widget) *retained.Widget {
 }
 
 // buildStatusText creates the status text widget
-func buildStatusText(ref **retained.Widget) *retained.Widget {
-	w := retained.Text("Initializing...", "text-white")
+func buildStatusText(ref **ctd.Widget) *ctd.Widget {
+	w := ctd.Text("Initializing...", "text-white")
 	*ref = w
 	return w
 }
 
 // buildDeviceText creates a text widget for device list
-func buildDeviceText(ref **retained.Widget) *retained.Widget {
-	w := retained.Text("Loading devices...", "text-gray-300 text-sm")
+func buildDeviceText(ref **ctd.Widget) *ctd.Widget {
+	w := ctd.Text("Loading devices...", "text-gray-300 text-sm")
 	*ref = w
 	return w
 }
 
 // buildCameraPreview creates a Video widget for displaying camera frames
-func buildCameraPreview(ref **retained.Widget) *retained.Widget {
-	w := retained.VideoStream(640, 480, "w-full h-64 rounded-lg bg-gray-700 object-cover")
+func buildCameraPreview(ref **ctd.Widget) *ctd.Widget {
+	w := ctd.VideoStream(640, 480, "w-full h-64 rounded-lg bg-gray-700 object-cover")
 	*ref = w
 	return w
 }
 
 // buildMicrophone creates a Microphone widget (invisible data source)
-func buildMicrophone(ref **retained.Widget, micLevelBar, statusText **retained.Widget) *retained.Widget {
-	w := retained.Microphone("").
+func buildMicrophone(ref **ctd.Widget, micLevelBar, statusText **ctd.Widget) *ctd.Widget {
+	w := ctd.Microphone("").
 		OnMicrophoneLevelChange(func(level float32) {
 			// Update level bar width based on audio level (as percentage)
 			if *micLevelBar != nil {
@@ -269,8 +269,8 @@ func buildMicrophone(ref **retained.Widget, micLevelBar, statusText **retained.W
 }
 
 // buildCamera creates a Camera widget (invisible data source)
-func buildCamera(ref **retained.Widget, cameraPreview, statusText **retained.Widget) *retained.Widget {
-	w := retained.Camera("").
+func buildCamera(ref **ctd.Widget, cameraPreview, statusText **ctd.Widget) *ctd.Widget {
+	w := ctd.Camera("").
 		OnCameraFrame(func(textureID uint32) {
 			// Forward camera frames to the Video widget for display
 			if *cameraPreview != nil {

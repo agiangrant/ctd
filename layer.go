@@ -1,13 +1,13 @@
 // Package retained provides layer abstraction for regional re-rendering.
 // Layers group widgets that can be rendered to offscreen textures and
 // composited together, enabling partial updates when only some regions change.
-package retained
+package ctd
 
 import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/agiangrant/centered/internal/ffi"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 // LayerID uniquely identifies a render layer.

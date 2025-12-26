@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 func init() {
@@ -30,14 +30,15 @@ const bundledVideoPath = "examples/video/example.mp4"
 
 // State for the video player UI
 var (
-	videoWidget *retained.Widget
-	statusText  *retained.Widget
+	videoWidget *ctd.Widget
+	statusText  *ctd.Widget
 )
 
 func main() {
 	// Create the game loop
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	config.TargetFPS = 30
+	loop := ctd.NewLoop(config)
 
 	// Build the UI
 	root := buildUI()
@@ -98,9 +99,9 @@ func updateStatus(text string) {
 	}
 }
 
-func buildUI() *retained.Widget {
+func buildUI() *ctd.Widget {
 	// Create the main video widget using bundled file
-	videoWidget = retained.VideoFromFile(bundledVideoPath, "w-full h-80 rounded-lg bg-gray-800").
+	videoWidget = ctd.VideoFromFile(bundledVideoPath, "w-full h-80 rounded-lg bg-gray-800").
 		WithLoop().
 		OnVideoEnded(func() {
 			fmt.Println("Video ended!")
@@ -112,42 +113,42 @@ func buildUI() *retained.Widget {
 		})
 
 	// Create status text
-	statusText = retained.Text("Loading...", "text-sm text-gray-400")
+	statusText = ctd.Text("Loading...", "text-sm text-gray-400")
 
-	return retained.VStack("flex-1 bg-gray-900 p-8",
+	return ctd.VStack("flex-1 bg-gray-900 p-8",
 		// Header
-		retained.Text("Video Widget Example", "text-4xl font-bold text-white mb-2"),
-		retained.Text("Bundled video file + URL examples", "text-lg text-gray-400 mb-8"),
+		ctd.Text("Video Widget Example", "text-4xl font-bold text-white mb-2"),
+		ctd.Text("Bundled video file + URL examples", "text-lg text-gray-400 mb-8"),
 
 		// Main video player
-		retained.VStack("bg-gray-800 rounded-xl p-6 gap-4",
+		ctd.VStack("bg-gray-800 rounded-xl p-6 gap-4",
 			// Video container
 			videoWidget,
 
 			// Status and controls
-			retained.HStack("items-center gap-4",
+			ctd.HStack("items-center gap-4",
 				statusText,
-				retained.Container("flex-1"),
+				ctd.Container("flex-1"),
 			),
 
 			// Playback controls
-			retained.HStack("gap-4 justify-center",
-				retained.Button("Play", "px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium").
-					OnClick(func(e *retained.MouseEvent) {
+			ctd.HStack("gap-4 justify-center",
+				ctd.Button("Play", "px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium").
+					OnClick(func(e *ctd.MouseEvent) {
 						if videoWidget != nil {
 							videoWidget.VideoPlay()
 							updateStatus("Playing")
 						}
 					}),
-				retained.Button("Pause", "px-6 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-medium").
-					OnClick(func(e *retained.MouseEvent) {
+				ctd.Button("Pause", "px-6 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-medium").
+					OnClick(func(e *ctd.MouseEvent) {
 						if videoWidget != nil {
 							videoWidget.VideoPause()
 							updateStatus("Paused")
 						}
 					}),
-				retained.Button("Restart", "px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium").
-					OnClick(func(e *retained.MouseEvent) {
+				ctd.Button("Restart", "px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium").
+					OnClick(func(e *ctd.MouseEvent) {
 						if videoWidget != nil {
 							videoWidget.VideoSeek(0)
 							videoWidget.VideoPlay()
@@ -158,14 +159,14 @@ func buildUI() *retained.Widget {
 		),
 
 		// Additional examples
-		retained.Text("Video Options", "text-2xl font-semibold text-white mt-8 mb-4"),
+		ctd.Text("Video Options", "text-2xl font-semibold text-white mt-8 mb-4"),
 
-		retained.HStack("gap-6",
+		ctd.HStack("gap-6",
 			// Bundled file example
 			videoCard(
 				"Bundled File",
 				"Loaded from local file (instant).",
-				retained.VideoFromFile(bundledVideoPath, "w-48 h-32 rounded-lg").
+				ctd.VideoFromFile(bundledVideoPath, "w-48 h-32 rounded-lg").
 					WithAutoplay().
 					WithMuted().
 					WithLoop(),
@@ -175,7 +176,7 @@ func buildUI() *retained.Widget {
 			videoCard(
 				"URL + Autoplay",
 				"Loaded from URL (downloads first).",
-				retained.VideoFromURL(testVideoURL, "w-48 h-32 rounded-lg").
+				ctd.VideoFromURL(testVideoURL, "w-48 h-32 rounded-lg").
 					WithAutoplay().
 					WithMuted().
 					WithLoop(),
@@ -185,25 +186,25 @@ func buildUI() *retained.Widget {
 			videoCard(
 				"No Loop",
 				"Video plays once then stops.",
-				retained.VideoFromFile(bundledVideoPath, "w-48 h-32 rounded-lg").
+				ctd.VideoFromFile(bundledVideoPath, "w-48 h-32 rounded-lg").
 					WithAutoplay().
 					WithMuted(),
 			),
 		),
 
 		// Instructions
-		retained.Text("Press SPACE to toggle play/pause on the main video", "text-sm text-gray-500 mt-4"),
+		ctd.Text("Press SPACE to toggle play/pause on the main video", "text-sm text-gray-500 mt-4"),
 
 		// Spacer
-		retained.Container("flex-1"),
+		ctd.Container("flex-1"),
 	)
 }
 
 // videoCard creates a card with a video and description
-func videoCard(title, description string, video *retained.Widget) *retained.Widget {
-	return retained.VStack("bg-gray-800 rounded-xl p-4 gap-3",
-		retained.Text(title, "text-lg font-semibold text-white"),
+func videoCard(title, description string, video *ctd.Widget) *ctd.Widget {
+	return ctd.VStack("bg-gray-800 rounded-xl p-4 gap-3",
+		ctd.Text(title, "text-lg font-semibold text-white"),
 		video,
-		retained.Text(description, "text-sm text-gray-400 max-w-xs"),
+		ctd.Text(description, "text-sm text-gray-400 max-w-xs"),
 	)
 }

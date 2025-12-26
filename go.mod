@@ -1,4 +1,4 @@
-module github.com/agiangrant/centered
+module github.com/agiangrant/ctd
 
 go 1.25.4
 

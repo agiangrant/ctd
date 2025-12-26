@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Centered is a cross-platform native GUI framework combining Rust's performance with Go's development velocity. It features a Tailwind-inspired styling system and supports both immediate mode and retained mode rendering. The project is in early development (Phase 1: Foundation).
+CTD is a cross-platform native GUI framework combining Rust's performance with Go's development velocity. It features a Tailwind-inspired styling system and supports both immediate mode and retained mode rendering. The project is in early development (Phase 1: Foundation).
 
 **Key Philosophy**: Platform-appropriate UX with shared core technology. Mobile and desktop are separate applications using the same Rust engine, not a single compromised codebase.
 
@@ -61,17 +61,15 @@ The engine crate builds as lib, cdylib, and staticlib for FFI consumption by Go.
 ### Go Commands
 
 ```bash
-# Run Go tests (widget API, Tailwind parser)
-go test -v ./widget_test.go ./widget.go
+# Run Go tests (Tailwind parser)
 go test -v ./tw/
 
 # Run benchmarks
 go test -bench=. -benchmem ./tw/
-go test -bench=BenchmarkWidget -benchmem ./widget_test.go ./widget.go
 
 # Build example application (requires Rust engine to be built first)
 cd engine && cargo build --release && cd ..
-go build -o bin/example ./examples/basic/
+go build -o bin/example ./examples/demo/
 
 # Generate Tailwind utilities
 go run tools/generate/main.go
@@ -85,10 +83,8 @@ go run tools/generate/main.go
 
 **Go Framework** (implemented): Idiomatic Go API with Tailwind-first styling, widget composition, FFI bindings. Located in:
 - `internal/ffi/ffi.go`: CGO bindings to Rust engine
-- `widget.go`: High-level widget API (VStack, HStack, Text, Button, etc.)
-- `engine.go`: Engine lifecycle management and frame rendering
+- Root package (`ctd`): Widget system with layout, events, animation, and state management
 - `tw/`: Complete Tailwind CSS parser with 2,117+ utility classes and arbitrary value support
-- `retained/`: Retained mode widget system with automatic layout, event dispatch, and state management
 
 ### Rendering Modes
 
@@ -174,7 +170,7 @@ type ComputedStyles struct {
 
 **Usage**:
 ```go
-import "github.com/agiangrant/centered/tw"
+import "github.com/agiangrant/ctd/tw"
 
 // Parse Tailwind classes
 styles := tw.ParseClasses("bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg")
@@ -190,21 +186,21 @@ styles2 := tw.ParseClasses("w-[80%] h-[400px] bg-[#1da1f2]")
 
 **Testing**: See `tw/parser_test.go`, `tw/advanced_test.go`, `tw/arbitrary_test.go`
 
-### Retained Mode Widget System (`retained/`)
+### Widget System (Root Package)
 
 **Status**: Fully implemented with layout engine, event dispatch, and text input widgets.
 
-The retained mode system provides a declarative widget API with automatic layout and state management:
+The widget system provides a declarative widget API with automatic layout and state management:
 
 **Core Files**:
-- `retained/widget.go` - Widget struct, builders, property accessors
-- `retained/layout.go` - Flexbox layout engine (Go implementation)
-- `retained/event_dispatch.go` - Mouse/keyboard event routing to widgets
-- `retained/loop.go` - Event loop integration, frame rendering
-- `retained/text_input.go` - TextField and TextArea implementations
-- `retained/tailwind.go` - Style property extraction from Tailwind classes
-- `retained/animation.go` - Animation system with easing functions and AnimationRegistry
-- `retained/scroll.go` - Scroll animation utilities for keyboard avoidance and navigation
+- `widget.go` - Widget struct, builders, property accessors
+- `layout.go` - Flexbox layout engine (Go implementation)
+- `event_dispatch.go` - Mouse/keyboard event routing to widgets
+- `loop.go` - Event loop integration, frame rendering
+- `text_input.go` - TextField and TextArea implementations
+- `tailwind.go` - Style property extraction from Tailwind classes
+- `animation.go` - Animation system with easing functions and AnimationRegistry
+- `scroll.go` - Scroll animation utilities for keyboard avoidance and navigation
 
 **Widget Kinds**:
 - Layout: `VStack`, `HStack`, `ZStack`, `Container`, `Spacer`
@@ -213,7 +209,7 @@ The retained mode system provides a declarative widget API with automatic layout
 - Custom: Extensible via `KindCustom`
 
 **Layout System**:
-The Go-side layout engine (`retained/layout.go`) implements flexbox:
+The Go-side layout engine (`layout.go`) implements flexbox:
 - `calculateLayout()` - Main entry point, processes widget tree
 - `calculateIntrinsicSize()` - Computes minimum size based on content
 - `layoutChildren()` - Distributes space among children (flex-grow/shrink)
@@ -276,7 +272,7 @@ The measurement function is swappable via `SetMeasureTextWidthFunc()` to support
 - ✅ Focus triggers keyboard on touch down (required for iOS responder chain)
 - ✅ Drag-to-scroll automatically blurs focused inputs and hides keyboard
 
-**Scroll Animation Utilities** (`retained/scroll.go`):
+**Scroll Animation Utilities** (`scroll.go`):
 - `ScrollToWidget()` - Animate scroll to make a widget visible
 - `ScrollToWidgetWithKeyboard()` - Same but accounts for keyboard height
 - `ScrollToY()` - Animate to a specific scroll position (via AnimationBuilder)
@@ -286,18 +282,18 @@ The measurement function is swappable via `SetMeasureTextWidthFunc()` to support
 
 **Usage Example**:
 ```go
-import "github.com/agiangrant/centered/retained"
+import "github.com/agiangrant/ctd"
 
-func buildUI() *retained.Widget {
-    return retained.VStack(
-        retained.HStack(
-            retained.Text("Welcome").Class("text-2xl font-bold text-white"),
-            retained.Spacer(),
-            retained.Button("Settings").OnClick(func() { /* ... */ }),
+func buildUI() *ctd.Widget {
+    return ctd.VStack(
+        ctd.HStack(
+            ctd.Text("Welcome").Class("text-2xl font-bold text-white"),
+            ctd.Spacer(),
+            ctd.Button("Settings").OnClick(func() { /* ... */ }),
         ).Class("px-4 py-2 bg-gray-800"),
 
-        retained.Container(
-            retained.TextField().
+        ctd.Container(
+            ctd.TextField().
                 Placeholder("Enter your name").
                 Class("w-full px-3 py-2 bg-gray-700 rounded"),
         ).Class("p-4"),
@@ -305,7 +301,7 @@ func buildUI() *retained.Widget {
 }
 
 func main() {
-    retained.Run(retained.AppConfig{
+    ctd.Run(ctd.AppConfig{
         Title: "My App",
         Width: 800, Height: 600,
     }, buildUI)
@@ -470,10 +466,10 @@ Example patterns:
 
 ### Building UIs with the Go FFI API
 
-The primary API is in `internal/ffi/ffi.go`. Applications use immediate mode rendering with a callback-based event loop:
+The low-level FFI API is in `internal/ffi/ffi.go`. For most applications, use the higher-level `ctd` package instead. The FFI API provides immediate mode rendering with a callback-based event loop:
 
 ```go
-import "github.com/agiangrant/centered/internal/ffi"
+import "github.com/agiangrant/ctd/internal/ffi"
 
 func main() {
     config := ffi.DefaultAppConfig()

@@ -6,8 +6,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -15,13 +15,13 @@ func init() {
 }
 
 func main() {
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 
 	tree := loop.Tree()
 
 	// Status label to show current state
-	var statusLabel *retained.Widget
+	var statusLabel *ctd.Widget
 
 	// Build the UI
 	root := buildUI(&statusLabel)
@@ -45,11 +45,11 @@ func main() {
 	})
 
 	// Frame callback
-	loop.OnFrame(func(frame *retained.Frame) {
+	loop.OnFrame(func(frame *ctd.Frame) {
 		fps := 1.0 / frame.DeltaTime
 		frame.DrawText(
 			fmt.Sprintf("FPS: %.1f", fps),
-			float32(750), 10, 14, retained.ColorWhite,
+			float32(750), 10, 14, ctd.ColorWhite,
 		)
 	})
 
@@ -66,25 +66,25 @@ func main() {
 	}
 }
 
-func buildUI(statusLabel **retained.Widget) *retained.Widget {
-	root := retained.Container("").
+func buildUI(statusLabel **ctd.Widget) *ctd.Widget {
+	root := ctd.Container("").
 		WithSize(900, 700).
-		WithBackground(retained.Hex("#1a1a2e"))
+		WithBackground(ctd.Hex("#1a1a2e"))
 
 	// Header
-	header := retained.HStack("",
-		retained.Text("Form Controls Demo", "").
-			WithTextStyle(retained.ColorWhite, 24),
+	header := ctd.HStack("",
+		ctd.Text("Form Controls Demo", "").
+			WithTextStyle(ctd.ColorWhite, 24),
 	).
 		WithFrame(20, 20, 860, 50).
-		WithBackground(retained.Hex("#16213e")).
+		WithBackground(ctd.Hex("#16213e")).
 		WithCornerRadius(8).
 		WithPadding(12)
 
 	// Status display
-	status := retained.Text("Interact with controls to see updates", "").
+	status := ctd.Text("Interact with controls to see updates", "").
 		WithFrame(20, 80, 860, 30).
-		WithTextStyle(retained.ColorGray400, 14)
+		WithTextStyle(ctd.ColorGray400, 14)
 	*statusLabel = status
 
 	// Checkbox section
@@ -107,11 +107,11 @@ func buildUI(statusLabel **retained.Widget) *retained.Widget {
 	return root
 }
 
-func buildCheckboxSection(statusLabel *retained.Widget) *retained.Widget {
+func buildCheckboxSection(statusLabel *ctd.Widget) *ctd.Widget {
 	// Checkboxes
-	cb1 := retained.Checkbox("Enable notifications", "")
-	cb2 := retained.Checkbox("Send email updates", "")
-	cb3 := retained.Checkbox("Auto-save enabled", "").SetChecked(true)
+	cb1 := ctd.Checkbox("Enable notifications", "")
+	cb2 := ctd.Checkbox("Send email updates", "")
+	cb3 := ctd.Checkbox("Auto-save enabled", "").SetChecked(true)
 
 	// Wire up change handlers
 	cb1.OnChange(func(value any) {
@@ -129,38 +129,38 @@ func buildCheckboxSection(statusLabel *retained.Widget) *retained.Widget {
 		statusLabel.SetText(fmt.Sprintf("Auto-save: %v", checked))
 	})
 
-	return retained.VStack("",
-		retained.Text("Checkboxes", "").WithTextStyle(retained.ColorWhite, 16),
+	return ctd.VStack("",
+		ctd.Text("Checkboxes", "").WithTextStyle(ctd.ColorWhite, 16),
 		cb1,
 		cb2,
 		cb3,
 	).
 		WithFrame(20, 120, 280, 160).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(10)
 }
 
-func buildToggleSection(statusLabel *retained.Widget) *retained.Widget {
+func buildToggleSection(statusLabel *ctd.Widget) *ctd.Widget {
 	// Toggles
-	t1 := retained.Toggle("")
-	t2 := retained.Toggle("").SetOn(true)
-	t3 := retained.Toggle("").SetDisabled(true)
+	t1 := ctd.Toggle("")
+	t2 := ctd.Toggle("").SetOn(true)
+	t3 := ctd.Toggle("").SetDisabled(true)
 
 	// Labels for toggles
-	label1 := retained.HStack("",
-		retained.Text("Dark Mode", "").WithTextStyle(retained.ColorGray300, 14),
+	label1 := ctd.HStack("",
+		ctd.Text("Dark Mode", "").WithTextStyle(ctd.ColorGray300, 14),
 		t1,
 	).WithGap(10)
 
-	label2 := retained.HStack("",
-		retained.Text("Airplane Mode", "").WithTextStyle(retained.ColorGray300, 14),
+	label2 := ctd.HStack("",
+		ctd.Text("Airplane Mode", "").WithTextStyle(ctd.ColorGray300, 14),
 		t2,
 	).WithGap(10)
 
-	label3 := retained.HStack("",
-		retained.Text("Disabled Toggle", "").WithTextStyle(retained.ColorGray500, 14),
+	label3 := ctd.HStack("",
+		ctd.Text("Disabled Toggle", "").WithTextStyle(ctd.ColorGray500, 14),
 		t3,
 	).WithGap(10)
 
@@ -174,24 +174,24 @@ func buildToggleSection(statusLabel *retained.Widget) *retained.Widget {
 		statusLabel.SetText(fmt.Sprintf("Airplane Mode: %v", on))
 	})
 
-	return retained.VStack("",
-		retained.Text("Toggles (iOS-style)", "").WithTextStyle(retained.ColorWhite, 16),
+	return ctd.VStack("",
+		ctd.Text("Toggles (iOS-style)", "").WithTextStyle(ctd.ColorWhite, 16),
 		label1,
 		label2,
 		label3,
 	).
 		WithFrame(320, 120, 280, 160).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(10)
 }
 
-func buildRadioSection(statusLabel *retained.Widget) *retained.Widget {
+func buildRadioSection(statusLabel *ctd.Widget) *ctd.Widget {
 	// Radio buttons in a group
-	r1 := retained.Radio("Small", "size", "").SetData("small")
-	r2 := retained.Radio("Medium", "size", "").SetData("medium").SetChecked(true)
-	r3 := retained.Radio("Large", "size", "").SetData("large")
+	r1 := ctd.Radio("Small", "size", "").SetData("small")
+	r2 := ctd.Radio("Medium", "size", "").SetData("medium").SetChecked(true)
+	r3 := ctd.Radio("Large", "size", "").SetData("large")
 
 	// Handler for radio group
 	handler := func(value any) {
@@ -201,28 +201,28 @@ func buildRadioSection(statusLabel *retained.Widget) *retained.Widget {
 	r2.OnChange(handler)
 	r3.OnChange(handler)
 
-	return retained.VStack("",
-		retained.Text("Radio Buttons", "").WithTextStyle(retained.ColorWhite, 16),
-		retained.Text("Select size:", "").WithTextStyle(retained.ColorGray400, 12),
+	return ctd.VStack("",
+		ctd.Text("Radio Buttons", "").WithTextStyle(ctd.ColorWhite, 16),
+		ctd.Text("Select size:", "").WithTextStyle(ctd.ColorGray400, 12),
 		r1,
 		r2,
 		r3,
 	).
 		WithFrame(620, 120, 260, 180).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(8)
 }
 
-func buildSliderSection(statusLabel *retained.Widget) *retained.Widget {
+func buildSliderSection(statusLabel *ctd.Widget) *ctd.Widget {
 	// Volume slider (0-100)
-	volumeSlider := retained.Slider("").
+	volumeSlider := ctd.Slider("").
 		SetSliderRange(0, 100).
 		SetSliderValue(70).
 		SetSliderStep(1)
 
-	volumeLabel := retained.Text("Volume: 70", "").WithTextStyle(retained.ColorGray300, 14)
+	volumeLabel := ctd.Text("Volume: 70", "").WithTextStyle(ctd.ColorGray300, 14)
 
 	volumeSlider.OnChange(func(value any) {
 		v := value.(float32)
@@ -231,11 +231,11 @@ func buildSliderSection(statusLabel *retained.Widget) *retained.Widget {
 	})
 
 	// Brightness slider (continuous)
-	brightnessSlider := retained.Slider("").
+	brightnessSlider := ctd.Slider("").
 		SetSliderRange(0, 1).
 		SetSliderValue(0.5)
 
-	brightnessLabel := retained.Text("Brightness: 50%", "").WithTextStyle(retained.ColorGray300, 14)
+	brightnessLabel := ctd.Text("Brightness: 50%", "").WithTextStyle(ctd.ColorGray300, 14)
 
 	brightnessSlider.OnChange(func(value any) {
 		v := value.(float32)
@@ -244,12 +244,12 @@ func buildSliderSection(statusLabel *retained.Widget) *retained.Widget {
 	})
 
 	// Temperature slider with range
-	tempSlider := retained.Slider("").
+	tempSlider := ctd.Slider("").
 		SetSliderRange(60, 80).
 		SetSliderValue(72).
 		SetSliderStep(0.5)
 
-	tempLabel := retained.Text("Temperature: 72.0°F", "").WithTextStyle(retained.ColorGray300, 14)
+	tempLabel := ctd.Text("Temperature: 72.0°F", "").WithTextStyle(ctd.ColorGray300, 14)
 
 	tempSlider.OnChange(func(value any) {
 		v := value.(float32)
@@ -257,8 +257,8 @@ func buildSliderSection(statusLabel *retained.Widget) *retained.Widget {
 		statusLabel.SetText(fmt.Sprintf("Temperature set to: %.1f°F", v))
 	})
 
-	return retained.VStack("",
-		retained.Text("Sliders", "").WithTextStyle(retained.ColorWhite, 16),
+	return ctd.VStack("",
+		ctd.Text("Sliders", "").WithTextStyle(ctd.ColorWhite, 16),
 		volumeLabel,
 		volumeSlider,
 		brightnessLabel,
@@ -267,16 +267,16 @@ func buildSliderSection(statusLabel *retained.Widget) *retained.Widget {
 		tempSlider,
 	).
 		WithFrame(20, 300, 420, 220).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(8)
 }
 
-func buildSelectSection(statusLabel *retained.Widget) *retained.Widget {
+func buildSelectSection(statusLabel *ctd.Widget) *ctd.Widget {
 	// Country select
-	countrySelect := retained.Select("Select a country", "").
-		SetSelectOptions([]retained.SelectOption{
+	countrySelect := ctd.Select("Select a country", "").
+		SetSelectOptions([]ctd.SelectOption{
 			{Label: "United States", Value: "us"},
 			{Label: "Canada", Value: "ca"},
 			{Label: "United Kingdom", Value: "uk"},
@@ -290,8 +290,8 @@ func buildSelectSection(statusLabel *retained.Widget) *retained.Widget {
 	})
 
 	// Priority select
-	prioritySelect := retained.Select("Select priority", "").
-		SetSelectOptions([]retained.SelectOption{
+	prioritySelect := ctd.Select("Select priority", "").
+		SetSelectOptions([]ctd.SelectOption{
 			{Label: "Low", Value: 1},
 			{Label: "Medium", Value: 2},
 			{Label: "High", Value: 3},
@@ -303,15 +303,15 @@ func buildSelectSection(statusLabel *retained.Widget) *retained.Widget {
 		statusLabel.SetText(fmt.Sprintf("Priority level: %v", value))
 	})
 
-	return retained.VStack("",
-		retained.Text("Dropdown Selects", "").WithTextStyle(retained.ColorWhite, 16),
-		retained.Text("Country:", "").WithTextStyle(retained.ColorGray400, 12),
+	return ctd.VStack("",
+		ctd.Text("Dropdown Selects", "").WithTextStyle(ctd.ColorWhite, 16),
+		ctd.Text("Country:", "").WithTextStyle(ctd.ColorGray400, 12),
 		countrySelect,
-		retained.Text("Priority:", "").WithTextStyle(retained.ColorGray400, 12),
+		ctd.Text("Priority:", "").WithTextStyle(ctd.ColorGray400, 12),
 		prioritySelect,
 	).
 		WithFrame(460, 300, 420, 220).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(8)

@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -25,8 +25,8 @@ const (
 )
 
 func main() {
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 	anims := loop.Animations()
 
@@ -49,25 +49,25 @@ func main() {
 		return false
 	})
 
-	loop.OnFrame(func(frame *retained.Frame) {
+	loop.OnFrame(func(frame *ctd.Frame) {
 		// Draw hover/focus indicator
 		if hovered := loop.Events().HoveredWidget(); hovered != nil {
 			bounds := hovered.ComputedBounds()
 			frame.DrawText(
 				fmt.Sprintf("Hovering: %s", hovered.Kind()),
-				10, 10, 14, retained.ColorWhite,
+				10, 10, 14, ctd.ColorWhite,
 			)
 			frame.DrawText(
 				fmt.Sprintf("Bounds: (%.0f, %.0f, %.0f, %.0f)",
 					bounds.X, bounds.Y, bounds.Width, bounds.Height),
-				10, 30, 12, retained.ColorGray400,
+				10, 30, 12, ctd.ColorGray400,
 			)
 		}
 
 		if focused := loop.Events().FocusedWidget(); focused != nil {
 			frame.DrawText(
 				fmt.Sprintf("Focused: %s", focused.Kind()),
-				10, 50, 14, retained.ColorGreen400,
+				10, 50, 14, ctd.ColorGreen400,
 			)
 		}
 	})
@@ -90,82 +90,82 @@ func main() {
 
 // WidgetRefs holds references to widgets we want to add handlers to
 type WidgetRefs struct {
-	Button1          *retained.Widget
-	Button2          *retained.Widget
-	Button3          *retained.Widget
-	FullscreenButton *retained.Widget
-	HoverBox         *retained.Widget
-	ClickCounter     *retained.Widget
-	StatusText       *retained.Widget
+	Button1          *ctd.Widget
+	Button2          *ctd.Widget
+	Button3          *ctd.Widget
+	FullscreenButton *ctd.Widget
+	HoverBox         *ctd.Widget
+	ClickCounter     *ctd.Widget
+	StatusText       *ctd.Widget
 }
 
-func buildInteractiveUI() (*retained.Widget, *WidgetRefs) {
+func buildInteractiveUI() (*ctd.Widget, *WidgetRefs) {
 	refs := &WidgetRefs{}
 
-	root := retained.VStack("bg-gray-900 w-full")
+	root := ctd.VStack("bg-gray-900 w-full")
 	// Title
-	title := retained.Text("Interactive Event System Demo", "text-white text-2xl")
+	title := ctd.Text("Interactive Event System Demo", "text-white text-2xl")
 	// Instructions panel
-	instructions := retained.VStack("bg-gray-800 rounded-lg p-4 gap-2",
-		retained.Text("Instructions:", "text-yellow-400 text-lg"),
-		retained.Text("- Hover over buttons to see color change", "text-gray-300 text-sm"),
-		retained.Text("- Click buttons to increment counter", "text-gray-300 text-sm"),
-		retained.Text("- Watch the status text update", "text-gray-300 text-sm"),
-		retained.Text("- Press ESC to exit", "text-gray-300 text-sm"),
+	instructions := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-2",
+		ctd.Text("Instructions:", "text-yellow-400 text-lg"),
+		ctd.Text("- Hover over buttons to see color change", "text-gray-300 text-sm"),
+		ctd.Text("- Click buttons to increment counter", "text-gray-300 text-sm"),
+		ctd.Text("- Watch the status text update", "text-gray-300 text-sm"),
+		ctd.Text("- Press ESC to exit", "text-gray-300 text-sm"),
 	)
 
 	// Button row - NOW USING TAILWIND hover: CLASSES!
 	// Hover styles are applied automatically via Tailwind variants
-	refs.Button1 = retained.Container("bg-blue-500 hover:bg-blue-600 active:bg-blue-700 rounded-lg").
+	refs.Button1 = ctd.Container("bg-blue-500 hover:bg-blue-600 active:bg-blue-700 rounded-lg").
 		WithChildren(
-			retained.Text("Button 1", "text-white text-base").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Button 1", "text-white text-base").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	refs.Button2 = retained.Container("bg-green-500 hover:bg-green-600 active:bg-green-700 rounded-lg").
+	refs.Button2 = ctd.Container("bg-green-500 hover:bg-green-600 active:bg-green-700 rounded-lg").
 		WithFrame(160, 300, 120, 50).
 		WithChildren(
-			retained.Text("Button 2", "text-white text-base").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Button 2", "text-white text-base").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	refs.Button3 = retained.Container("bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-lg").
+	refs.Button3 = ctd.Container("bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-lg").
 		WithChildren(
-			retained.Text("Button 3", "text-white text-base").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Button 3", "text-white text-base").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Fullscreen toggle button
-	refs.FullscreenButton = retained.Container("bg-yellow-500 hover:bg-yellow-600 active:bg-yellow-700 rounded-lg").
+	refs.FullscreenButton = ctd.Container("bg-yellow-500 hover:bg-yellow-600 active:bg-yellow-700 rounded-lg").
 		WithChildren(
-			retained.Text("Fullscreen", "text-white text-base").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Fullscreen", "text-white text-base").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Hover demonstration box - using Tailwind hover variant
-	refs.HoverBox = retained.Container("bg-gray-700 hover:bg-gray-600 rounded-xl").
+	refs.HoverBox = ctd.Container("bg-gray-700 hover:bg-gray-600 rounded-xl").
 		WithChildren(
-			retained.Text("Hover over me!", "text-white text-lg").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Hover over me!", "text-white text-lg").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Counter display
-	counterPanel := retained.Container("bg-gray-800 rounded-lg")
-	counterLabel := retained.Text("Click Count:", "text-gray-400 text-sm")
-	refs.ClickCounter = retained.Text("0", "text-white text-4xl")
+	counterPanel := ctd.Container("bg-gray-800 rounded-lg")
+	counterLabel := ctd.Text("Click Count:", "text-gray-400 text-sm")
+	refs.ClickCounter = ctd.Text("0", "text-white text-4xl")
 
 	// Status text
-	refs.StatusText = retained.Text("Waiting for interaction...", "text-gray-500 text-base")
+	refs.StatusText = ctd.Text("Waiting for interaction...", "text-gray-500 text-base")
 
 	// Event info panel
-	eventPanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-1",
-		retained.Text("Event System Features:", "text-white text-sm"),
-		retained.Text("- Cached bounds for O(1) hit testing", "text-gray-400 text-xs"),
-		retained.Text("- Capture/Bubble event phases", "text-gray-400 text-xs"),
-		retained.Text("- Click & double-click detection", "text-gray-400 text-xs"),
-		retained.Text("- Hover enter/leave tracking", "text-gray-400 text-xs"),
-		retained.Text("- Focus management", "text-gray-400 text-xs"),
-		retained.Text("- Object pooling for performance", "text-gray-400 text-xs"),
+	eventPanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-1",
+		ctd.Text("Event System Features:", "text-white text-sm"),
+		ctd.Text("- Cached bounds for O(1) hit testing", "text-gray-400 text-xs"),
+		ctd.Text("- Capture/Bubble event phases", "text-gray-400 text-xs"),
+		ctd.Text("- Click & double-click detection", "text-gray-400 text-xs"),
+		ctd.Text("- Hover enter/leave tracking", "text-gray-400 text-xs"),
+		ctd.Text("- Focus management", "text-gray-400 text-xs"),
+		ctd.Text("- Object pooling for performance", "text-gray-400 text-xs"),
 	)
 
 	root.WithChildren(
@@ -184,7 +184,7 @@ func buildInteractiveUI() (*retained.Widget, *WidgetRefs) {
 	return root, refs
 }
 
-func setupEventHandlers(refs *WidgetRefs, anims *retained.AnimationRegistry) {
+func setupEventHandlers(refs *WidgetRefs, anims *ctd.AnimationRegistry) {
 	clickCount := 0
 
 	// Helper to update click counter
@@ -194,22 +194,22 @@ func setupEventHandlers(refs *WidgetRefs, anims *retained.AnimationRegistry) {
 	}
 
 	// Button 1 handlers - hover/active colors now handled by Tailwind classes!
-	refs.Button1.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.Button1.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering Button 1 (Tailwind hover:bg-blue-600)")
-		refs.StatusText.SetTextColor(retained.ColorBlue400)
+		refs.StatusText.SetTextColor(ctd.ColorBlue400)
 	})
-	refs.Button1.OnMouseLeave(func(e *retained.MouseEvent) {
+	refs.Button1.OnMouseLeave(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Mouse left Button 1")
-		refs.StatusText.SetTextColor(retained.ColorGray500)
+		refs.StatusText.SetTextColor(ctd.ColorGray500)
 	})
-	refs.Button1.OnClick(func(e *retained.MouseEvent) {
+	refs.Button1.OnClick(func(e *ctd.MouseEvent) {
 		updateCounter()
 		refs.StatusText.SetText("Clicked Button 1!")
-		refs.StatusText.SetTextColor(retained.ColorGreen400)
+		refs.StatusText.SetTextColor(ctd.ColorGreen400)
 		// Animate the button
 		refs.Button1.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack).
+			Easing(ctd.EaseOutBack).
 			OnComplete(func() {
 				refs.Button1.Animate(anims).
 					Duration(100 * time.Millisecond)
@@ -217,66 +217,66 @@ func setupEventHandlers(refs *WidgetRefs, anims *retained.AnimationRegistry) {
 	})
 
 	// Button 2 handlers - hover colors via Tailwind
-	refs.Button2.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.Button2.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering Button 2 (Tailwind hover:bg-green-600)")
-		refs.StatusText.SetTextColor(retained.ColorGreen400)
+		refs.StatusText.SetTextColor(ctd.ColorGreen400)
 	})
-	refs.Button2.OnMouseLeave(func(e *retained.MouseEvent) {
+	refs.Button2.OnMouseLeave(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Mouse left Button 2")
-		refs.StatusText.SetTextColor(retained.ColorGray500)
+		refs.StatusText.SetTextColor(ctd.ColorGray500)
 	})
-	refs.Button2.OnClick(func(e *retained.MouseEvent) {
+	refs.Button2.OnClick(func(e *ctd.MouseEvent) {
 		updateCounter()
 		refs.StatusText.SetText("Clicked Button 2!")
-		refs.StatusText.SetTextColor(retained.ColorGreen400)
+		refs.StatusText.SetTextColor(ctd.ColorGreen400)
 	})
 
 	// Button 3 handlers - hover colors via Tailwind
-	refs.Button3.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.Button3.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering Button 3 (Tailwind hover:bg-purple-600)")
-		refs.StatusText.SetTextColor(retained.ColorPurple400)
+		refs.StatusText.SetTextColor(ctd.ColorPurple400)
 	})
-	refs.Button3.OnMouseLeave(func(e *retained.MouseEvent) {
+	refs.Button3.OnMouseLeave(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Mouse left Button 3")
-		refs.StatusText.SetTextColor(retained.ColorGray500)
+		refs.StatusText.SetTextColor(ctd.ColorGray500)
 	})
-	refs.Button3.OnDoubleClick(func(e *retained.MouseEvent) {
+	refs.Button3.OnDoubleClick(func(e *ctd.MouseEvent) {
 		clickCount += 5
 		refs.ClickCounter.SetText(fmt.Sprintf("%d", clickCount))
 		refs.StatusText.SetText("Double-clicked Button 3! (+5 bonus)")
-		refs.StatusText.SetTextColor(retained.ColorYellow400)
+		refs.StatusText.SetTextColor(ctd.ColorYellow400)
 	})
-	refs.Button3.OnClick(func(e *retained.MouseEvent) {
+	refs.Button3.OnClick(func(e *ctd.MouseEvent) {
 		updateCounter()
 		refs.StatusText.SetText("Clicked Button 3!")
-		refs.StatusText.SetTextColor(retained.ColorPurple400)
+		refs.StatusText.SetTextColor(ctd.ColorPurple400)
 	})
 
 	// Fullscreen button handler
-	refs.FullscreenButton.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.FullscreenButton.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering Fullscreen button (Tailwind hover:bg-yellow-600)")
-		refs.StatusText.SetTextColor(retained.ColorYellow400)
+		refs.StatusText.SetTextColor(ctd.ColorYellow400)
 	})
-	refs.FullscreenButton.OnMouseLeave(func(e *retained.MouseEvent) {
+	refs.FullscreenButton.OnMouseLeave(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Mouse left Fullscreen button")
-		refs.StatusText.SetTextColor(retained.ColorGray500)
+		refs.StatusText.SetTextColor(ctd.ColorGray500)
 	})
-	refs.FullscreenButton.OnClick(func(e *retained.MouseEvent) {
-		retained.WindowToggleFullscreen()
+	refs.FullscreenButton.OnClick(func(e *ctd.MouseEvent) {
+		ctd.WindowToggleFullscreen()
 		refs.StatusText.SetText("Toggled fullscreen!")
-		refs.StatusText.SetTextColor(retained.ColorYellow400)
+		refs.StatusText.SetTextColor(ctd.ColorYellow400)
 	})
 
 	// Hover box handlers - hover color via Tailwind
-	refs.HoverBox.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.HoverBox.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText(fmt.Sprintf("Entered hover box at (%.0f, %.0f) - Tailwind hover:bg-gray-600", e.LocalX, e.LocalY))
-		refs.StatusText.SetTextColor(retained.ColorWhite)
+		refs.StatusText.SetTextColor(ctd.ColorWhite)
 	})
-	refs.HoverBox.OnMouseLeave(func(e *retained.MouseEvent) {
+	refs.HoverBox.OnMouseLeave(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Left hover box")
-		refs.StatusText.SetTextColor(retained.ColorGray500)
+		refs.StatusText.SetTextColor(ctd.ColorGray500)
 	})
-	refs.HoverBox.OnMouseMove(func(e *retained.MouseEvent) {
+	refs.HoverBox.OnMouseMove(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText(fmt.Sprintf("Mouse at (%.0f, %.0f) in hover box", e.LocalX, e.LocalY))
 	})
 }

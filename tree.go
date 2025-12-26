@@ -1,11 +1,11 @@
-package retained
+package ctd
 
 import (
 	"hash/fnv"
 	"sync"
 	"sync/atomic"
 
-	"github.com/agiangrant/centered/internal/ffi"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 // UpdateType identifies what kind of update occurred.

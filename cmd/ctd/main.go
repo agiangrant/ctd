@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agiangrant/centered/cmd/ctd/commands"
+	"github.com/agiangrant/ctd/cmd/ctd/commands"
 )
 
 const version = "0.1.0"

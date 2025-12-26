@@ -8,9 +8,9 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
-	"github.com/agiangrant/centered/tw"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
+	"github.com/agiangrant/ctd/tw"
 )
 
 func init() {
@@ -19,16 +19,16 @@ func init() {
 
 // UI holds references to widgets that need responsive updates
 type UI struct {
-	root           *retained.Widget
-	header         *retained.Widget
-	statusText     *retained.Widget
-	cards          []*retained.Widget
+	root           *ctd.Widget
+	header         *ctd.Widget
+	statusText     *ctd.Widget
+	cards          []*ctd.Widget
 	lastBreakpoint tw.Breakpoint
 }
 
 func main() {
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 
 	ui := buildUI()
@@ -87,17 +87,17 @@ func buildUI() *UI {
 	}
 
 	// Root container
-	ui.root = retained.Container("bg-gray-900").
+	ui.root = ctd.Container("bg-gray-900").
 		WithSize(1000, 700)
 
 	// Header - changes text size at breakpoints
 	// Base: text-lg, md: text-xl, lg: text-2xl, xl: text-3xl
-	ui.header = retained.Text("Responsive Design Demo", "text-white text-lg md:text-xl lg:text-2xl xl:text-3xl").
+	ui.header = ctd.Text("Responsive Design Demo", "text-white text-lg md:text-xl lg:text-2xl xl:text-3xl").
 		WithFrame(20, 20, 960, 40)
 
 	// Status bar - shows current breakpoint
 	// Changes color at breakpoints: base gray, sm blue, md green, lg yellow, xl orange, 2xl red
-	ui.statusText = retained.Text("Width: 1000px | Breakpoint: lg", "text-gray-400 sm:text-blue-400 md:text-green-400 lg:text-yellow-400 xl:text-orange-400 text-sm").
+	ui.statusText = ctd.Text("Width: 1000px | Breakpoint: lg", "text-gray-400 sm:text-blue-400 md:text-green-400 lg:text-yellow-400 xl:text-orange-400 text-sm").
 		WithFrame(20, 65, 600, 20)
 
 	// Breakpoint indicator cards
@@ -124,15 +124,15 @@ func buildUI() *UI {
 		x := startX + float32(i)*(cardWidth+cardGap)
 
 		// Card container
-		card := retained.Container(bp.classes+" rounded-lg p-3").
+		card := ctd.Container(bp.classes+" rounded-lg p-3").
 			WithFrame(x, startY, cardWidth, cardHeight)
 
 		// Card title
-		title := retained.Text(bp.name, "text-white text-lg font-bold").
+		title := ctd.Text(bp.name, "text-white text-lg font-bold").
 			WithFrame(x+12, startY+12, 80, 24)
 
 		// Card threshold
-		threshold := retained.Text(bp.threshold, "text-gray-300 text-xs").
+		threshold := ctd.Text(bp.threshold, "text-gray-300 text-xs").
 			WithFrame(x+12, startY+42, 120, 16)
 
 		card.WithChildren(title, threshold)
@@ -140,10 +140,10 @@ func buildUI() *UI {
 	}
 
 	// Info panel
-	infoPanel := retained.Container("bg-gray-800 rounded-xl p-4").
+	infoPanel := ctd.Container("bg-gray-800 rounded-xl p-4").
 		WithFrame(20, 220, 960, 460)
 
-	infoTitle := retained.Text("How It Works", "text-yellow-400 text-lg").
+	infoTitle := ctd.Text("How It Works", "text-yellow-400 text-lg").
 		WithFrame(36, 236, 200, 24)
 
 	info := []string{
@@ -154,19 +154,19 @@ func buildUI() *UI {
 		"5. Call UpdateStateForWidth() on widgets when resize triggers breakpoint change",
 	}
 
-	var infoWidgets []*retained.Widget
+	var infoWidgets []*ctd.Widget
 	infoWidgets = append(infoWidgets, infoTitle)
 
 	yOffset := float32(275)
 	for _, line := range info {
-		text := retained.Text(line, "text-gray-300 text-sm").
+		text := ctd.Text(line, "text-gray-300 text-sm").
 			WithFrame(36, yOffset, 920, 20)
 		infoWidgets = append(infoWidgets, text)
 		yOffset += 24
 	}
 
 	// Supported classes section
-	supportedTitle := retained.Text("Supported Responsive Properties", "text-green-400 text-lg").
+	supportedTitle := ctd.Text("Supported Responsive Properties", "text-green-400 text-lg").
 		WithFrame(36, yOffset+20, 300, 24)
 	infoWidgets = append(infoWidgets, supportedTitle)
 	yOffset += 50
@@ -184,9 +184,9 @@ func buildUI() *UI {
 	}
 
 	for _, cat := range categories {
-		nameText := retained.Text(cat.name+":", "text-blue-400 text-xs").
+		nameText := ctd.Text(cat.name+":", "text-blue-400 text-xs").
 			WithFrame(36, yOffset, 100, 16)
-		itemsText := retained.Text(cat.items, "text-gray-400 text-xs").
+		itemsText := ctd.Text(cat.items, "text-gray-400 text-xs").
 			WithFrame(140, yOffset, 800, 16)
 		infoWidgets = append(infoWidgets, nameText, itemsText)
 		yOffset += 20
@@ -195,7 +195,7 @@ func buildUI() *UI {
 	infoPanel.WithChildren(infoWidgets...)
 
 	// Build the full widget tree
-	children := []*retained.Widget{ui.header, ui.statusText}
+	children := []*ctd.Widget{ui.header, ui.statusText}
 	children = append(children, ui.cards...)
 	children = append(children, infoPanel)
 	ui.root.WithChildren(children...)

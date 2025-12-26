@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -21,8 +21,8 @@ func init() {
 
 func main() {
 	// Create the game loop with default config (60 FPS)
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 
 	// Get the tree to build our UI
 	tree := loop.Tree()
@@ -36,9 +36,9 @@ func main() {
 	var clickCount int
 
 	// References to widgets we want to update
-	var counterText *retained.Widget
-	var spinningBox *retained.Widget
-	var mouseLabel *retained.Widget
+	var counterText *ctd.Widget
+	var spinningBox *ctd.Widget
+	var mouseLabel *ctd.Widget
 
 	// Find our interactive widgets
 	findWidgets(root, &counterText, &spinningBox, &mouseLabel)
@@ -75,7 +75,7 @@ func main() {
 	})
 
 	// Frame callback - runs at 60 FPS
-	loop.OnFrame(func(frame *retained.Frame) {
+	loop.OnFrame(func(frame *ctd.Frame) {
 		// Update animation
 		animAngle += frame.DeltaTime * 2.0 // 2 radians per second
 
@@ -86,7 +86,7 @@ func main() {
 			r := uint8(100 + t*155)
 			g := uint8(50 + t*100)
 			b := uint8(200 - t*100)
-			spinningBox.SetBackgroundColor(retained.RGBA(r, g, b, 255))
+			spinningBox.SetBackgroundColor(ctd.RGBA(r, g, b, 255))
 
 			// Oscillate the size
 			scale := float32(0.8 + 0.4*math.Sin(animAngle*0.5))
@@ -99,13 +99,13 @@ func main() {
 		fps := 1.0 / frame.DeltaTime
 		frame.DrawText(
 			fmt.Sprintf("FPS: %.1f", fps),
-			float32(900), 10, 14, retained.ColorWhite,
+			float32(900), 10, 14, ctd.ColorWhite,
 		)
 
 		// Frame number
 		frame.DrawText(
 			fmt.Sprintf("Frame: %d", frame.Number),
-			float32(900), 30, 12, retained.ColorGray400,
+			float32(900), 30, 12, ctd.ColorGray400,
 		)
 
 		// Draw a particle-like effect (immediate mode)
@@ -117,7 +117,7 @@ func main() {
 			py := float32(400) + radius*float32(math.Sin(angle))
 
 			alpha := uint8(100 + 100*math.Sin(animAngle*2+float64(i)))
-			frame.DrawRect(px-3, py-3, 6, 6, retained.RGBA(255, 200, 100, alpha), 3)
+			frame.DrawRect(px-3, py-3, 6, 6, ctd.RGBA(255, 200, 100, alpha), 3)
 		}
 	})
 
@@ -138,92 +138,92 @@ func main() {
 }
 
 // buildUI creates the widget tree
-func buildUI() *retained.Widget {
+func buildUI() *ctd.Widget {
 	// Root container
-	root := retained.Container("").
+	root := ctd.Container("").
 		WithSize(1024, 768).
-		WithBackground(retained.Hex("#1a1a2e"))
+		WithBackground(ctd.Hex("#1a1a2e"))
 
 	// Header - use padding for internal spacing
-	header := retained.HStack("",
-		retained.Text("Retained Mode Demo", "").
-			WithTextStyle(retained.ColorWhite, 24),
+	header := ctd.HStack("",
+		ctd.Text("Retained Mode Demo", "").
+			WithTextStyle(ctd.ColorWhite, 24),
 	).
 		WithFrame(20, 20, 400, 50).
-		WithBackground(retained.Hex("#16213e")).
+		WithBackground(ctd.Hex("#16213e")).
 		WithCornerRadius(8).
 		WithPadding(12)
 
 	// Counter panel
-	counterPanel := retained.VStack("",
-		retained.Text("Interactive Counter", "").
-			WithTextStyle(retained.ColorGray300, 16),
-		retained.Text("Clicks: 0", ""). // Will be updated
-						WithTextStyle(retained.ColorWhite, 32).
+	counterPanel := ctd.VStack("",
+		ctd.Text("Interactive Counter", "").
+			WithTextStyle(ctd.ColorGray300, 16),
+		ctd.Text("Clicks: 0", ""). // Will be updated
+						WithTextStyle(ctd.ColorWhite, 32).
 						WithData("counterText"), // Tag for finding later
-		retained.Text("(click anywhere)", "").
-			WithTextStyle(retained.ColorGray500, 12),
+		ctd.Text("(click anywhere)", "").
+			WithTextStyle(ctd.ColorGray500, 12),
 	).
 		WithFrame(20, 90, 220, 150).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(8)
 
 	// Animated box panel
-	animPanel := retained.VStack("",
-		retained.Text("Animated Widget", "").
-			WithTextStyle(retained.ColorGray300, 14),
-		retained.Container("").
+	animPanel := ctd.VStack("",
+		ctd.Text("Animated Widget", "").
+			WithTextStyle(ctd.ColorGray300, 14),
+		ctd.Container("").
 			WithSize(100, 100).
-			WithBackground(retained.ColorBlue500).
+			WithBackground(ctd.ColorBlue500).
 			WithCornerRadius(8).
 			WithData("spinningBox"), // Tag for finding later
 	).
 		WithFrame(20, 260, 220, 160).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(8)
 
 	// Mouse tracking panel
-	mousePanel := retained.VStack("",
-		retained.Text("Mouse Position", "").
-			WithTextStyle(retained.ColorGray300, 14),
-		retained.Text("Mouse: 0, 0", "").
-			WithTextStyle(retained.ColorGreen400, 18).
+	mousePanel := ctd.VStack("",
+		ctd.Text("Mouse Position", "").
+			WithTextStyle(ctd.ColorGray300, 14),
+		ctd.Text("Mouse: 0, 0", "").
+			WithTextStyle(ctd.ColorGreen400, 18).
 			WithData("mouseLabel"),
 	).
 		WithFrame(20, 440, 220, 80).
-		WithBackground(retained.Hex("#0f3460")).
+		WithBackground(ctd.Hex("#0f3460")).
 		WithCornerRadius(12).
 		WithPadding(16).
 		WithGap(6)
 
 	// Info panel
-	infoPanel := retained.VStack("",
-		retained.Text("How it works:", "").
-			WithTextStyle(retained.ColorWhite, 16),
-		retained.Text("• Retained widgets update via channels", "").
-			WithTextStyle(retained.ColorGray400, 12),
-		retained.Text("• Game loop batches updates at 60 FPS", "").
-			WithTextStyle(retained.ColorGray400, 12),
-		retained.Text("• Immediate draws (particles, FPS) overlay", "").
-			WithTextStyle(retained.ColorGray400, 12),
-		retained.Text("• Single FFI call per frame", "").
-			WithTextStyle(retained.ColorGray400, 12),
+	infoPanel := ctd.VStack("",
+		ctd.Text("How it works:", "").
+			WithTextStyle(ctd.ColorWhite, 16),
+		ctd.Text("• Retained widgets update via channels", "").
+			WithTextStyle(ctd.ColorGray400, 12),
+		ctd.Text("• Game loop batches updates at 60 FPS", "").
+			WithTextStyle(ctd.ColorGray400, 12),
+		ctd.Text("• Immediate draws (particles, FPS) overlay", "").
+			WithTextStyle(ctd.ColorGray400, 12),
+		ctd.Text("• Single FFI call per frame", "").
+			WithTextStyle(ctd.ColorGray400, 12),
 	).
 		WithFrame(20, 540, 300, 180).
-		WithBackground(retained.Hex("#16213e")).
+		WithBackground(ctd.Hex("#16213e")).
 		WithCornerRadius(8).
 		WithPadding(16).
 		WithGap(6)
 
 	// Particle area label - positioned absolutely
-	particleLabel := retained.Text("Particle Effect Area →", "").
+	particleLabel := ctd.Text("Particle Effect Area →", "").
 		WithFrame(500, 380, 180, 30).
-		WithTextStyle(retained.ColorGray500, 14).
-		WithPositionMode(retained.PositionAbsolute)
+		WithTextStyle(ctd.ColorGray500, 14).
+		WithPositionMode(ctd.PositionAbsolute)
 
 	// Add all to root
 	root.
@@ -233,7 +233,7 @@ func buildUI() *retained.Widget {
 }
 
 // findWidgets recursively finds widgets by their data tags
-func findWidgets(w *retained.Widget, counterText, spinningBox, mouseLabel **retained.Widget) {
+func findWidgets(w *ctd.Widget, counterText, spinningBox, mouseLabel **ctd.Widget) {
 	if data := w.Data(); data != nil {
 		switch data {
 		case "counterText":
@@ -251,7 +251,7 @@ func findWidgets(w *retained.Widget, counterText, spinningBox, mouseLabel **reta
 }
 
 // Demonstrate concurrent updates from goroutines
-func startBackgroundUpdates(widget *retained.Widget) {
+func startBackgroundUpdates(widget *ctd.Widget) {
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()

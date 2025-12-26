@@ -8,7 +8,7 @@ import (
 	"image/png"
 	"log"
 
-	"github.com/agiangrant/centered/internal/ffi"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 // Application state

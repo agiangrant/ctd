@@ -12,15 +12,15 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
 	runtime.LockOSThread()
 }
 
-var searchInput *retained.Widget
+var searchInput *ctd.Widget
 
 func main() {
 	log.Println("Starting Frameless Window Demo...")
@@ -29,8 +29,8 @@ func main() {
 	log.Println("  - Type in the search box")
 	log.Println("  - Press ESC to close")
 
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 
 	// Build the UI
@@ -73,44 +73,44 @@ func main() {
 	}
 }
 
-func buildUI() *retained.Widget {
+func buildUI() *ctd.Widget {
 	// Main container - flexbox column layout
-	root := retained.Container("bg-gray-800 flex flex-col w-full")
+	root := ctd.Container("bg-gray-800 flex flex-col w-full")
 
 	// Title bar / drag area
 	// We reserve 70px on the left for the native traffic light controls
-	titleBar := retained.Container("bg-gray-700 w-full h-8 flex items-center").
+	titleBar := ctd.Container("bg-gray-700 w-full h-8 flex items-center").
 		WithChildren(
 			// Spacer for native window controls (traffic lights)
-			retained.Container("w-20 h-8 bg-blue-400"), // ~80px to leave room for traffic lights
+			ctd.Container("w-20 h-8 bg-blue-400"), // ~80px to leave room for traffic lights
 			// Title (centered in remaining space)
-			retained.Container("flex-1 flex items-center justify-center").WithChildren(
+			ctd.Container("flex-1 flex items-center justify-center").WithChildren(
 
-				retained.Text("Frameless App", "text-gray-300 text-sm text-center font-medium"),
+				ctd.Text("Frameless App", "text-gray-300 text-sm text-center font-medium"),
 			),
 			// Right padding to balance the layout
-			retained.Container("w-20 h-8 bg-blue-500"),
+			ctd.Container("w-20 h-8 bg-blue-500"),
 		)
 
 	// Search bar
-	searchBar := retained.Container("px-4 py-3 flex items-center bg-gray-750 shrink-0").
+	searchBar := ctd.Container("px-4 py-3 flex items-center bg-gray-750 shrink-0").
 		WithChildren(
 			// Search icon
-			retained.Text("🔍", "text-gray-500 text-lg mr-3"),
+			ctd.Text("🔍", "text-gray-500 text-lg mr-3"),
 			// Search input
 			createSearchInput(),
 		)
 
 	// Content area (fills remaining space)
-	content := retained.Container("flex-1 p-4 overflow-auto").
+	content := ctd.Container("flex-1 p-4 overflow-auto").
 		WithChildren(
-			retained.Text("This is a resizable frameless window with native window controls.", "text-gray-400 text-sm"),
+			ctd.Text("This is a resizable frameless window with native window controls.", "text-gray-400 text-sm"),
 		)
 
 	// Status bar
-	statusBar := retained.Container("h-6 bg-gray-700 px-4 flex items-center shrink-0").
+	statusBar := ctd.Container("h-6 bg-gray-700 px-4 flex items-center shrink-0").
 		WithChildren(
-			retained.Text("Ready", "text-gray-500 text-xs"),
+			ctd.Text("Ready", "text-gray-500 text-xs"),
 		)
 
 	root.WithChildren(titleBar, searchBar, content, statusBar)
@@ -118,8 +118,8 @@ func buildUI() *retained.Widget {
 	return root
 }
 
-func createSearchInput() *retained.Widget {
-	searchInput = retained.TextField("Search anything...", "flex-1 bg-transparent text-white text-lg")
+func createSearchInput() *ctd.Widget {
+	searchInput = ctd.TextField("Search anything...", "flex-1 bg-transparent text-white text-lg")
 
 	return searchInput
 }

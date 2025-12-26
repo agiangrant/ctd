@@ -1,10 +1,10 @@
-package retained
+package ctd
 
 import (
 	"runtime"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 // abs returns the absolute value of a float32.

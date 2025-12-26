@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -31,12 +31,12 @@ func init() {
 
 var (
 	// Widgets we need to reference
-	clipboardDisplay *retained.Widget
-	selectedFiles    *retained.Widget
-	trayStatus       *retained.Widget
-	clipboard        *retained.Widget
-	filePicker       *retained.Widget
-	trayIcon         *retained.Widget
+	clipboardDisplay *ctd.Widget
+	selectedFiles    *ctd.Widget
+	trayStatus       *ctd.Widget
+	clipboard        *ctd.Widget
+	filePicker       *ctd.Widget
+	trayIcon         *ctd.Widget
 )
 
 func main() {
@@ -46,8 +46,8 @@ func main() {
 	log.Println("  - Check the menu bar for the tray icon")
 	log.Println("  - Press ESC to quit")
 
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 
 	// Build the UI
@@ -76,9 +76,9 @@ func main() {
 	}
 }
 
-func buildUI() *retained.Widget {
+func buildUI() *ctd.Widget {
 	// Create non-rendering clipboard widget
-	clipboard = retained.Clipboard().
+	clipboard = ctd.Clipboard().
 		SetClipboardMonitor(true).
 		OnClipboardChange(func(text string) {
 			// Update display when clipboard changes
@@ -93,7 +93,7 @@ func buildUI() *retained.Widget {
 		})
 
 	// Create non-rendering file picker widget
-	filePicker = retained.FilePicker().
+	filePicker = ctd.FilePicker().
 		SetFilePickerTitle("Select Files").
 		SetFilePickerMultiple(true).
 		OnFileSelect(func(paths []string) {
@@ -112,27 +112,27 @@ func buildUI() *retained.Widget {
 		})
 
 	// Main container
-	root := retained.Container("bg-gray-900").
+	root := ctd.Container("bg-gray-900").
 		WithSize(700, 500)
 
 	// Title
-	title := retained.Text("Clipboard & FilePicker Demo", "text-white text-2xl font-bold")
+	title := ctd.Text("Clipboard & FilePicker Demo", "text-white text-2xl font-bold")
 
 	// =========================================================================
 	// Clipboard Section
 	// =========================================================================
-	clipboardSection := retained.Container("bg-gray-800 rounded-lg")
+	clipboardSection := ctd.Container("bg-gray-800 rounded-lg")
 
-	clipboardTitle := retained.Text("Clipboard", "text-blue-400 text-lg font-semibold")
+	clipboardTitle := ctd.Text("Clipboard", "text-blue-400 text-lg font-semibold")
 
-	clipboardDisplay = retained.Text("Clipboard: (monitoring...)", "text-gray-300 text-sm")
+	clipboardDisplay = ctd.Text("Clipboard: (monitoring...)", "text-gray-300 text-sm")
 
 	// Clipboard buttons
-	btnReadClipboard := retained.Container("bg-blue-600 hover:bg-blue-500 rounded").
+	btnReadClipboard := ctd.Container("bg-blue-600 hover:bg-blue-500 rounded").
 		WithChildren(
-			retained.Text("Read Clipboard", "text-white text-sm"),
+			ctd.Text("Read Clipboard", "text-white text-sm"),
 		)
-	btnReadClipboard.OnClick(func(e *retained.MouseEvent) {
+	btnReadClipboard.OnClick(func(e *ctd.MouseEvent) {
 		text := clipboard.ClipboardText()
 		if text == "" {
 			text = "(empty)"
@@ -144,20 +144,20 @@ func buildUI() *retained.Widget {
 		clipboardDisplay.SetText(fmt.Sprintf("Clipboard: %s", text))
 	})
 
-	btnCopyHello := retained.Container("bg-green-600 hover:bg-green-500 rounded").
+	btnCopyHello := ctd.Container("bg-green-600 hover:bg-green-500 rounded").
 		WithChildren(
-			retained.Text("Copy 'Hello!'", "text-white text-sm"),
+			ctd.Text("Copy 'Hello!'", "text-white text-sm"),
 		)
-	btnCopyHello.OnClick(func(e *retained.MouseEvent) {
+	btnCopyHello.OnClick(func(e *ctd.MouseEvent) {
 		clipboard.SetClipboardText("Hello from Centered!")
 		clipboardDisplay.SetText("Clipboard: Hello from Centered!")
 	})
 
-	btnCopyTimestamp := retained.Container("bg-purple-600 hover:bg-purple-500 rounded").
+	btnCopyTimestamp := ctd.Container("bg-purple-600 hover:bg-purple-500 rounded").
 		WithChildren(
-			retained.Text("Copy Timestamp", "text-white text-sm"),
+			ctd.Text("Copy Timestamp", "text-white text-sm"),
 		)
-	btnCopyTimestamp.OnClick(func(e *retained.MouseEvent) {
+	btnCopyTimestamp.OnClick(func(e *ctd.MouseEvent) {
 		ts := time.Now().Format("2006-01-02 15:04:05")
 		clipboard.SetClipboardText(ts)
 		clipboardDisplay.SetText(fmt.Sprintf("Clipboard: %s", ts))
@@ -166,30 +166,30 @@ func buildUI() *retained.Widget {
 	// =========================================================================
 	// FilePicker Section
 	// =========================================================================
-	fileSection := retained.Container("bg-gray-800 rounded-lg")
+	fileSection := ctd.Container("bg-gray-800 rounded-lg")
 
-	fileTitle := retained.Text("File Picker", "text-green-400 text-lg font-semibold")
+	fileTitle := ctd.Text("File Picker", "text-green-400 text-lg font-semibold")
 
-	selectedFiles = retained.Text("No files selected", "text-gray-300 text-sm")
+	selectedFiles = ctd.Text("No files selected", "text-gray-300 text-sm")
 
 	// File picker buttons
-	btnOpenAny := retained.Container("bg-blue-600 hover:bg-blue-500 rounded").
+	btnOpenAny := ctd.Container("bg-blue-600 hover:bg-blue-500 rounded").
 		WithChildren(
-			retained.Text("Open Any File", "text-white text-sm"),
+			ctd.Text("Open Any File", "text-white text-sm"),
 		)
-	btnOpenAny.OnClick(func(e *retained.MouseEvent) {
+	btnOpenAny.OnClick(func(e *ctd.MouseEvent) {
 		filePicker.SetFilePickerFilters(nil)
 		filePicker.SetFilePickerMultiple(false)
 		filePicker.SetFilePickerTitle("Select a File")
 		filePicker.OpenFile()
 	})
 
-	btnOpenImages := retained.Container("bg-green-600 hover:bg-green-500 rounded").
+	btnOpenImages := ctd.Container("bg-green-600 hover:bg-green-500 rounded").
 		WithChildren(
-			retained.Text("Open Images", "text-white text-sm"),
+			ctd.Text("Open Images", "text-white text-sm"),
 		)
-	btnOpenImages.OnClick(func(e *retained.MouseEvent) {
-		filePicker.SetFilePickerFilters([]retained.FileFilter{
+	btnOpenImages.OnClick(func(e *ctd.MouseEvent) {
+		filePicker.SetFilePickerFilters([]ctd.FileFilter{
 			{Name: "Images", Extensions: []string{"png", "jpg", "jpeg", "gif", "webp"}},
 		})
 		filePicker.SetFilePickerMultiple(true)
@@ -197,12 +197,12 @@ func buildUI() *retained.Widget {
 		filePicker.OpenFile()
 	})
 
-	btnSave := retained.Container("bg-purple-600 hover:bg-purple-500 rounded").
+	btnSave := ctd.Container("bg-purple-600 hover:bg-purple-500 rounded").
 		WithChildren(
-			retained.Text("Save File", "text-white text-sm"),
+			ctd.Text("Save File", "text-white text-sm"),
 		)
-	btnSave.OnClick(func(e *retained.MouseEvent) {
-		filePicker.SetFilePickerFilters([]retained.FileFilter{
+	btnSave.OnClick(func(e *ctd.MouseEvent) {
+		filePicker.SetFilePickerFilters([]ctd.FileFilter{
 			{Name: "Text Files", Extensions: []string{"txt"}},
 		})
 		filePicker.SetFilePickerTitle("Save As")
@@ -217,17 +217,17 @@ func buildUI() *retained.Widget {
 	// =========================================================================
 	// TrayIcon Section
 	// =========================================================================
-	traySection := retained.Container("bg-gray-800 rounded-lg")
+	traySection := ctd.Container("bg-gray-800 rounded-lg")
 
-	trayTitle := retained.Text("Tray Icon", "text-yellow-400 text-lg font-semibold")
+	trayTitle := ctd.Text("Tray Icon", "text-yellow-400 text-lg font-semibold")
 
-	trayStatus = retained.Text("Tray icon active in menu bar", "text-gray-300 text-sm")
+	trayStatus = ctd.Text("Tray icon active in menu bar", "text-gray-300 text-sm")
 
 	// Create tray icon with menu
 	clickCount := 0
-	trayIcon = retained.TrayIconWithTitle("Demo").
+	trayIcon = ctd.TrayIconWithTitle("Demo").
 		SetTrayTooltip("System Services Demo").
-		SetTrayMenu([]retained.MenuItem{
+		SetTrayMenu([]ctd.MenuItem{
 			{Label: "Show Window", Enabled: true, OnClick: func() {
 				trayStatus.SetText("Menu: Show Window clicked")
 			}},
@@ -254,29 +254,29 @@ func buildUI() *retained.Widget {
 		})
 
 	// Tray icon buttons
-	btnShowTray := retained.Container("bg-blue-600 hover:bg-blue-500 rounded").
+	btnShowTray := ctd.Container("bg-blue-600 hover:bg-blue-500 rounded").
 		WithChildren(
-			retained.Text("Show Tray", "text-white text-sm"),
+			ctd.Text("Show Tray", "text-white text-sm"),
 		)
-	btnShowTray.OnClick(func(e *retained.MouseEvent) {
+	btnShowTray.OnClick(func(e *ctd.MouseEvent) {
 		trayIcon.SetTrayVisible(true)
 		trayStatus.SetText("Tray icon shown")
 	})
 
-	btnHideTray := retained.Container("bg-red-600 hover:bg-red-500 rounded").
+	btnHideTray := ctd.Container("bg-red-600 hover:bg-red-500 rounded").
 		WithChildren(
-			retained.Text("Hide Tray", "text-white text-sm"),
+			ctd.Text("Hide Tray", "text-white text-sm"),
 		)
-	btnHideTray.OnClick(func(e *retained.MouseEvent) {
+	btnHideTray.OnClick(func(e *ctd.MouseEvent) {
 		trayIcon.SetTrayVisible(false)
 		trayStatus.SetText("Tray icon hidden")
 	})
 
-	btnUpdateTitle := retained.Container("bg-green-600 hover:bg-green-500 rounded").
+	btnUpdateTitle := ctd.Container("bg-green-600 hover:bg-green-500 rounded").
 		WithChildren(
-			retained.Text("Update Title", "text-white text-sm"),
+			ctd.Text("Update Title", "text-white text-sm"),
 		)
-	btnUpdateTitle.OnClick(func(e *retained.MouseEvent) {
+	btnUpdateTitle.OnClick(func(e *ctd.MouseEvent) {
 		ts := time.Now().Format("15:04")
 		trayIcon.SetTrayTitle(ts)
 		trayStatus.SetText(fmt.Sprintf("Title updated to: %s", ts))
@@ -285,9 +285,9 @@ func buildUI() *retained.Widget {
 	// =========================================================================
 	// Instructions
 	// =========================================================================
-	instructions := retained.Text("The clipboard is monitored - copy text anywhere to see it update above. Check the menu bar for the tray icon.", "text-gray-500 text-xs")
+	instructions := ctd.Text("The clipboard is monitored - copy text anywhere to see it update above. Check the menu bar for the tray icon.", "text-gray-500 text-xs")
 
-	container := retained.Container("flex flex-row w-full flex-wrap gap-4 p-6 bg-gray-900")
+	container := ctd.Container("flex flex-row w-full flex-wrap gap-4 p-6 bg-gray-900")
 
 	// Add all children to root
 	container.WithChildren(

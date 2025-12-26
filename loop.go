@@ -1,4 +1,4 @@
-package retained
+package ctd
 
 import (
 	"container/list"
@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/tw"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd/tw"
 )
 
 // textMeasureCache is an LRU cache for text width measurements.

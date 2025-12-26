@@ -1,6 +1,6 @@
-package retained
+package ctd
 
-import "github.com/agiangrant/centered/internal/ffi"
+import "github.com/agiangrant/ctd/internal/ffi"
 
 // Control widgets: Checkbox, Toggle, Radio, Slider, Select
 // These provide common form input controls with event handling and rendering.

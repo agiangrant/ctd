@@ -6,8 +6,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -15,8 +15,8 @@ func init() {
 }
 
 func main() {
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 
 	root := buildUI()
@@ -53,44 +53,44 @@ func main() {
 	}
 }
 
-func buildUI() *retained.Widget {
-	root := retained.Container("bg-gray-900").
+func buildUI() *ctd.Widget {
+	root := ctd.Container("bg-gray-900").
 		WithSize(900, 700)
 
 	// Header
-	header := retained.Text("Text Input Widgets Demo", "text-white text-2xl").
+	header := ctd.Text("Text Input Widgets Demo", "text-white text-2xl").
 		WithFrame(20, 20, 400, 30)
 
-	subtitle := retained.Text("Click to focus, type to edit, arrow keys to navigate", "text-gray-400 text-sm").
+	subtitle := ctd.Text("Click to focus, type to edit, arrow keys to navigate", "text-gray-400 text-sm").
 		WithFrame(20, 55, 500, 20)
 
 	// ============ Left Column: Form Example ============
 
-	formPanel := retained.Container("bg-gray-800 rounded-xl p-4").
+	formPanel := ctd.Container("bg-gray-800 rounded-xl p-4").
 		WithFrame(20, 100, 420, 580)
 
-	formTitle := retained.Text("Form Example", "text-yellow-400 text-lg").
+	formTitle := ctd.Text("Form Example", "text-yellow-400 text-lg").
 		WithFrame(36, 116, 200, 24)
 
 	// Username field
-	usernameLabel := retained.Text("Username", "text-gray-300 text-sm").
+	usernameLabel := ctd.Text("Username", "text-gray-300 text-sm").
 		WithFrame(36, 150, 100, 20)
-	usernameField := retained.TextField("Enter username...", "bg-gray-700 text-white rounded px-3 py-2").
+	usernameField := ctd.TextField("Enter username...", "bg-gray-700 text-white rounded px-3 py-2").
 		WithFrame(36, 175, 380, 40).
 		WithData("usernameField")
 
 	// Password field (masked)
-	passwordLabel := retained.Text("Password (masked)", "text-gray-300 text-sm").
+	passwordLabel := ctd.Text("Password (masked)", "text-gray-300 text-sm").
 		WithFrame(36, 225, 200, 20)
-	passwordField := retained.TextField("Enter password...", "bg-gray-700 text-white rounded px-3 py-2").
+	passwordField := ctd.TextField("Enter password...", "bg-gray-700 text-white rounded px-3 py-2").
 		WithFrame(36, 250, 380, 40).
 		SetPassword(true).
 		WithData("passwordField")
 
 	// Numbers only field
-	numbersLabel := retained.Text("Numbers only (filtered)", "text-gray-300 text-sm").
+	numbersLabel := ctd.Text("Numbers only (filtered)", "text-gray-300 text-sm").
 		WithFrame(36, 300, 200, 20)
-	numbersField := retained.TextField("Enter numbers...", "bg-gray-700 text-white rounded px-3 py-2").
+	numbersField := ctd.TextField("Enter numbers...", "bg-gray-700 text-white rounded px-3 py-2").
 		WithFrame(36, 325, 380, 40).
 		SetCharFilter(func(r rune) bool {
 			return r >= '0' && r <= '9'
@@ -98,25 +98,25 @@ func buildUI() *retained.Widget {
 		WithData("numbersField")
 
 	// Read-only field
-	readonlyLabel := retained.Text("Read-only (select & copy only)", "text-gray-300 text-sm").
+	readonlyLabel := ctd.Text("Read-only (select & copy only)", "text-gray-300 text-sm").
 		WithFrame(36, 375, 250, 20)
-	readonlyField := retained.TextField("", "bg-gray-700 text-gray-400 rounded px-3 py-2").
+	readonlyField := ctd.TextField("", "bg-gray-700 text-gray-400 rounded px-3 py-2").
 		WithFrame(36, 400, 380, 40).
 		SetReadOnly(true).
 		SetInputText("This text is read-only").
 		WithData("readonlyField")
 
 	// Custom placeholder color (using Tailwind placeholder: variant)
-	customPlaceholderLabel := retained.Text("Custom placeholder (Tailwind)", "text-gray-300 text-sm").
+	customPlaceholderLabel := ctd.Text("Custom placeholder (Tailwind)", "text-gray-300 text-sm").
 		WithFrame(36, 450, 250, 20)
-	customPlaceholderField := retained.TextField("Blue placeholder text...", "bg-gray-700 text-white rounded px-3 py-2 placeholder:text-blue-400").
+	customPlaceholderField := ctd.TextField("Blue placeholder text...", "bg-gray-700 text-white rounded px-3 py-2 placeholder:text-blue-400").
 		WithFrame(36, 475, 380, 40).
 		WithData("customPlaceholderField")
 
 	// Bio textarea
-	bioLabel := retained.Text("Bio (multiline)", "text-gray-300 text-sm").
+	bioLabel := ctd.Text("Bio (multiline)", "text-gray-300 text-sm").
 		WithFrame(36, 525, 100, 20)
-	bioField := retained.TextArea("Tell us about yourself...", "bg-gray-700 text-white rounded px-3 py-2").
+	bioField := ctd.TextArea("Tell us about yourself...", "bg-gray-700 text-white rounded px-3 py-2").
 		WithFrame(36, 550, 380, 100).
 		WithData("bioField")
 
@@ -132,10 +132,10 @@ func buildUI() *retained.Widget {
 
 	// ============ Right Column: Features Demo ============
 
-	featuresPanel := retained.Container("bg-gray-800 rounded-xl p-4").
+	featuresPanel := ctd.Container("bg-gray-800 rounded-xl p-4").
 		WithFrame(460, 100, 420, 580)
 
-	featuresTitle := retained.Text("Keyboard Shortcuts", "text-yellow-400 text-lg").
+	featuresTitle := ctd.Text("Keyboard Shortcuts", "text-yellow-400 text-lg").
 		WithFrame(476, 116, 200, 24)
 
 	shortcuts := []struct {
@@ -161,21 +161,21 @@ func buildUI() *retained.Widget {
 		{"Option+Backspace", "Delete word before"},
 	}
 
-	var shortcutWidgets []*retained.Widget
+	var shortcutWidgets []*ctd.Widget
 	shortcutWidgets = append(shortcutWidgets, featuresTitle)
 
 	yOffset := float32(150)
 	for _, s := range shortcuts {
-		keyWidget := retained.Text(s.key, "text-blue-400 text-xs").
+		keyWidget := ctd.Text(s.key, "text-blue-400 text-xs").
 			WithFrame(476, yOffset, 120, 16)
-		descWidget := retained.Text(s.desc, "text-gray-400 text-xs").
+		descWidget := ctd.Text(s.desc, "text-gray-400 text-xs").
 			WithFrame(600, yOffset, 250, 16)
 		shortcutWidgets = append(shortcutWidgets, keyWidget, descWidget)
 		yOffset += 18
 	}
 
 	// Add new features section
-	newFeaturesTitle := retained.Text("New Features", "text-yellow-400 text-lg").
+	newFeaturesTitle := ctd.Text("New Features", "text-yellow-400 text-lg").
 		WithFrame(476, yOffset+10, 200, 24)
 	shortcutWidgets = append(shortcutWidgets, newFeaturesTitle)
 	yOffset += 40
@@ -192,9 +192,9 @@ func buildUI() *retained.Widget {
 	}
 
 	for _, f := range features {
-		nameWidget := retained.Text(f.name, "text-green-400 text-xs").
+		nameWidget := ctd.Text(f.name, "text-green-400 text-xs").
 			WithFrame(476, yOffset, 80, 16)
-		descWidget := retained.Text(f.desc, "text-gray-400 text-xs").
+		descWidget := ctd.Text(f.desc, "text-gray-400 text-xs").
 			WithFrame(560, yOffset, 290, 16)
 		shortcutWidgets = append(shortcutWidgets, nameWidget, descWidget)
 		yOffset += 18

@@ -19,8 +19,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 // Dummy export required by gomobile
@@ -28,7 +28,7 @@ func Dummy() {}
 
 // Global state for the demo
 var (
-	demoLoop   *retained.Loop
+	demoLoop   *ctd.Loop
 	clickCount int
 
 	// Media state (just toggle flags now, widgets handle the rest)
@@ -55,8 +55,8 @@ func StartDemo() {
 
 	runtime.LockOSThread()
 
-	config := retained.DefaultLoopConfig()
-	demoLoop = retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	demoLoop = ctd.NewLoop(config)
 	tree := demoLoop.Tree()
 	anims := demoLoop.Animations()
 
@@ -91,120 +91,120 @@ func StartDemo() {
 
 // DemoWidgetRefs holds references to widgets we want to interact with
 type DemoWidgetRefs struct {
-	CounterText *retained.Widget
-	StatusText  *retained.Widget
-	Button1     *retained.Widget
-	Button2     *retained.Widget
-	Button3     *retained.Widget
+	CounterText *ctd.Widget
+	StatusText  *ctd.Widget
+	Button1     *ctd.Widget
+	Button2     *ctd.Widget
+	Button3     *ctd.Widget
 
 	// Media widgets
-	AudioWidget      *retained.Widget // Audio player widget
-	AudioButton      *retained.Widget
-	AudioStatusText  *retained.Widget
-	MicWidget        *retained.Widget // Microphone widget
-	MicButton        *retained.Widget
-	MicStatusText    *retained.Widget
-	MicLevelText     *retained.Widget
-	VideoWidget      *retained.Widget // Video player widget
-	VideoButton      *retained.Widget
-	VideoStatusText  *retained.Widget
-	CameraWidget     *retained.Widget // Camera widget
-	CameraButton     *retained.Widget
-	CameraStatusText *retained.Widget
+	AudioWidget      *ctd.Widget // Audio player widget
+	AudioButton      *ctd.Widget
+	AudioStatusText  *ctd.Widget
+	MicWidget        *ctd.Widget // Microphone widget
+	MicButton        *ctd.Widget
+	MicStatusText    *ctd.Widget
+	MicLevelText     *ctd.Widget
+	VideoWidget      *ctd.Widget // Video player widget
+	VideoButton      *ctd.Widget
+	VideoStatusText  *ctd.Widget
+	CameraWidget     *ctd.Widget // Camera widget
+	CameraButton     *ctd.Widget
+	CameraStatusText *ctd.Widget
 
 	// iOS Features widgets
-	ClipboardCopyButton  *retained.Widget
-	ClipboardPasteButton *retained.Widget
-	ClipboardStatusText  *retained.Widget
-	HapticLightButton    *retained.Widget
-	HapticMediumButton   *retained.Widget
-	HapticHeavyButton    *retained.Widget
-	HapticSelectionBtn   *retained.Widget
-	HapticSuccessButton  *retained.Widget
-	HapticStatusText     *retained.Widget
-	KeyboardInput        *retained.Widget
-	KeyboardShowButton   *retained.Widget
-	KeyboardHideButton   *retained.Widget
-	KeyboardStatusText   *retained.Widget
+	ClipboardCopyButton  *ctd.Widget
+	ClipboardPasteButton *ctd.Widget
+	ClipboardStatusText  *ctd.Widget
+	HapticLightButton    *ctd.Widget
+	HapticMediumButton   *ctd.Widget
+	HapticHeavyButton    *ctd.Widget
+	HapticSelectionBtn   *ctd.Widget
+	HapticSuccessButton  *ctd.Widget
+	HapticStatusText     *ctd.Widget
+	KeyboardInput        *ctd.Widget
+	KeyboardShowButton   *ctd.Widget
+	KeyboardHideButton   *ctd.Widget
+	KeyboardStatusText   *ctd.Widget
 }
 
-func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
+func buildDemoUI() (*ctd.Widget, *DemoWidgetRefs) {
 	refs := &DemoWidgetRefs{}
 
 	// Title
-	title := retained.Text("Centered iOS Demo", "text-white text-2xl font-bold")
+	title := ctd.Text("Centered iOS Demo", "text-white text-2xl font-bold")
 
 	// Subtitle
-	subtitle := retained.Text("Tailwind-style UI on iOS with Go", "text-gray-400 text-base")
+	subtitle := ctd.Text("Tailwind-style UI on iOS with Go", "text-gray-400 text-base")
 
 	// Counter card
-	counterCard := retained.Container("bg-gray-800 rounded-2xl p-4")
+	counterCard := ctd.Container("bg-gray-800 rounded-2xl p-4")
 
-	counterLabel := retained.Text("Tap Counter", "text-gray-400 text-sm")
+	counterLabel := ctd.Text("Tap Counter", "text-gray-400 text-sm")
 
-	refs.CounterText = retained.Text("0", "text-white text-6xl font-bold")
+	refs.CounterText = ctd.Text("0", "text-white text-6xl font-bold")
 
 	// Button row
-	refs.Button1 = retained.Container("bg-blue-500 hover:bg-blue-600 active:bg-blue-700 rounded-xl p-3").
+	refs.Button1 = ctd.Container("bg-blue-500 hover:bg-blue-600 active:bg-blue-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("Blue", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Blue", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	refs.Button2 = retained.Container("bg-green-500 hover:bg-green-600 active:bg-green-700 rounded-xl p-3").
+	refs.Button2 = ctd.Container("bg-green-500 hover:bg-green-600 active:bg-green-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("Green", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Green", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	refs.Button3 = retained.Container("bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-xl p-3").
+	refs.Button3 = ctd.Container("bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("Purple", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Purple", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Status text
-	refs.StatusText = retained.Text("Tap a button to interact", "text-gray-500 text-sm")
+	refs.StatusText = ctd.Text("Tap a button to interact", "text-gray-500 text-sm")
 
 	// Feature list
-	featureCard := retained.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
-		retained.Text("Features", "text-white text-lg font-semibold"),
-		retained.Text("✓ Tailwind CSS classes", "text-green-400 text-sm"),
-		retained.Text("✓ Touch interactions", "text-green-400 text-sm"),
-		retained.Text("✓ Hover/Active states", "text-green-400 text-sm"),
-		retained.Text("✓ Animations", "text-green-400 text-sm"),
-		retained.Text("✓ Go + Rust engine", "text-green-400 text-sm"),
-		retained.Text("✓ No CGO required", "text-green-400 text-sm"),
+	featureCard := ctd.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
+		ctd.Text("Features", "text-white text-lg font-semibold"),
+		ctd.Text("✓ Tailwind CSS classes", "text-green-400 text-sm"),
+		ctd.Text("✓ Touch interactions", "text-green-400 text-sm"),
+		ctd.Text("✓ Hover/Active states", "text-green-400 text-sm"),
+		ctd.Text("✓ Animations", "text-green-400 text-sm"),
+		ctd.Text("✓ Go + Rust engine", "text-green-400 text-sm"),
+		ctd.Text("✓ No CGO required", "text-green-400 text-sm"),
 	)
 
 	// Media Testing Section
 	// Audio widget (invisible - just plays audio)
-	refs.AudioWidget = retained.Audio("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", "")
+	refs.AudioWidget = ctd.Audio("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", "")
 	refs.AudioWidget.SetAudioAutoplay(false) // Don't auto-play
 
-	refs.AudioStatusText = retained.Text("Tap to play audio", "text-gray-400 text-xs")
-	refs.AudioButton = retained.Container("bg-orange-500 hover:bg-orange-600 active:bg-orange-700 rounded-xl p-3").
+	refs.AudioStatusText = ctd.Text("Tap to play audio", "text-gray-400 text-xs")
+	refs.AudioButton = ctd.Container("bg-orange-500 hover:bg-orange-600 active:bg-orange-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("🔊 Audio", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("🔊 Audio", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Microphone widget (invisible - just captures audio)
-	refs.MicWidget = retained.Microphone("")
+	refs.MicWidget = ctd.Microphone("")
 	refs.MicWidget.SetMicrophoneAutoStart(false) // Don't auto-start
 
-	refs.MicStatusText = retained.Text("Tap to start recording", "text-gray-400 text-xs")
-	refs.MicLevelText = retained.Text("Level: --", "text-gray-500 text-xs")
-	refs.MicButton = retained.Container("bg-red-500 hover:bg-red-600 active:bg-red-700 rounded-xl p-3").
+	refs.MicStatusText = ctd.Text("Tap to start recording", "text-gray-400 text-xs")
+	refs.MicLevelText = ctd.Text("Level: --", "text-gray-500 text-xs")
+	refs.MicButton = ctd.Container("bg-red-500 hover:bg-red-600 active:bg-red-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("🎤 Microphone", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("🎤 Microphone", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Video widget - displays video
 	// Using URL since iOS apps are sandboxed and can't access relative file paths
 	// Big Buck Bunny test video (small 10s clip)
-	refs.VideoWidget = retained.VideoFromURL(
+	refs.VideoWidget = ctd.VideoFromURL(
 		"https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
 		"w-full h-48 rounded-lg bg-gray-800",
 	).
@@ -213,145 +213,145 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		OnVideoError(func(err error) {
 			log.Printf("VIDEO ERROR: %v", err)
 			refs.VideoStatusText.SetText(fmt.Sprintf("Error: %v", err))
-			refs.VideoStatusText.SetTextColor(retained.ColorRed400)
+			refs.VideoStatusText.SetTextColor(ctd.ColorRed400)
 		}).
 		OnVideoEnded(func() {
 			log.Printf("Video ended")
 			refs.VideoStatusText.SetText("Video ended, tap to replay")
-			refs.VideoStatusText.SetTextColor(retained.ColorGray400)
+			refs.VideoStatusText.SetTextColor(ctd.ColorGray400)
 			videoPlaying = false
 		})
 	refs.VideoWidget.SetVideoAutoplay(false) // Don't auto-play
 	log.Printf("Video widget created with source: %s", refs.VideoWidget.VideoSource())
 
-	refs.VideoStatusText = retained.Text("Tap to play video", "text-gray-400 text-xs")
-	refs.VideoButton = retained.Container("bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 rounded-xl p-3").
+	refs.VideoStatusText = ctd.Text("Tap to play video", "text-gray-400 text-xs")
+	refs.VideoButton = ctd.Container("bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("🎬 Video", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("🎬 Video", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
 	// Camera widget - displays camera feed
-	refs.CameraWidget = retained.CameraWithResolution(640, 480, 30, "w-full h-48 rounded-lg bg-gray-700")
+	refs.CameraWidget = ctd.CameraWithResolution(640, 480, 30, "w-full h-48 rounded-lg bg-gray-700")
 	refs.CameraWidget.SetCameraAutoStart(false) // Don't auto-start
 
-	refs.CameraStatusText = retained.Text("Tap to start camera", "text-gray-400 text-xs")
-	refs.CameraButton = retained.Container("bg-pink-500 hover:bg-pink-600 active:bg-pink-700 rounded-xl p-3").
+	refs.CameraStatusText = ctd.Text("Tap to start camera", "text-gray-400 text-xs")
+	refs.CameraButton = ctd.Container("bg-pink-500 hover:bg-pink-600 active:bg-pink-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("📷 Camera", "text-white text-base font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("📷 Camera", "text-white text-base font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	mediaCard := retained.VStack("bg-gray-800 rounded-2xl p-4 gap-3 w-full",
-		retained.Text("Media Testing", "text-white text-lg font-semibold"),
-		retained.Text("Test audio, video, mic, and camera", "text-gray-400 text-xs"),
+	mediaCard := ctd.VStack("bg-gray-800 rounded-2xl p-4 gap-3 w-full",
+		ctd.Text("Media Testing", "text-white text-lg font-semibold"),
+		ctd.Text("Test audio, video, mic, and camera", "text-gray-400 text-xs"),
 
 		// Audio row (widget is invisible, just include it in tree)
 		refs.AudioWidget,
-		retained.HStack("gap-2 items-center w-full",
+		ctd.HStack("gap-2 items-center w-full",
 			refs.AudioButton,
-			retained.VStack("gap-1 flex-1",
-				retained.Text("Audio Playback", "text-white text-sm"),
+			ctd.VStack("gap-1 flex-1",
+				ctd.Text("Audio Playback", "text-white text-sm"),
 				refs.AudioStatusText,
 			),
 		),
 
 		// Microphone row (widget is invisible, just include it in tree)
 		refs.MicWidget,
-		retained.HStack("gap-2 items-center w-full",
+		ctd.HStack("gap-2 items-center w-full",
 			refs.MicButton,
-			retained.VStack("gap-1 flex-1",
-				retained.Text("Microphone", "text-white text-sm"),
+			ctd.VStack("gap-1 flex-1",
+				ctd.Text("Microphone", "text-white text-sm"),
 				refs.MicStatusText,
 				refs.MicLevelText,
 			),
 		),
 
 		// Video section with display
-		retained.Text("Video Playback", "text-white text-sm"),
+		ctd.Text("Video Playback", "text-white text-sm"),
 		refs.VideoWidget,
-		retained.HStack("gap-2 items-center w-full",
+		ctd.HStack("gap-2 items-center w-full",
 			refs.VideoButton,
 			refs.VideoStatusText,
 		),
 
 		// Camera section with display
-		retained.Text("Camera Preview", "text-white text-sm"),
+		ctd.Text("Camera Preview", "text-white text-sm"),
 		refs.CameraWidget,
-		retained.HStack("gap-2 items-center w-full",
+		ctd.HStack("gap-2 items-center w-full",
 			refs.CameraButton,
 			refs.CameraStatusText,
 		),
 	)
 
 	// iOS Features Testing Section
-	refs.ClipboardStatusText = retained.Text("Tap Copy or Paste", "text-gray-400 text-xs")
-	refs.ClipboardCopyButton = retained.Container("bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 rounded-xl p-3").
+	refs.ClipboardStatusText = ctd.Text("Tap Copy or Paste", "text-gray-400 text-xs")
+	refs.ClipboardCopyButton = ctd.Container("bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("📋 Copy", "text-white text-sm font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("📋 Copy", "text-white text-sm font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
-	refs.ClipboardPasteButton = retained.Container("bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 rounded-xl p-3").
+	refs.ClipboardPasteButton = ctd.Container("bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 rounded-xl p-3").
 		WithChildren(
-			retained.Text("📄 Paste", "text-white text-sm font-semibold").
-				WithPositionMode(retained.PositionRelative),
-		)
-
-	refs.HapticStatusText = retained.Text("Tap a button to feel haptic", "text-gray-400 text-xs")
-	refs.HapticLightButton = retained.Container("bg-teal-500 hover:bg-teal-600 active:bg-teal-700 rounded-xl p-2").
-		WithChildren(
-			retained.Text("Light", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
-		)
-	refs.HapticMediumButton = retained.Container("bg-teal-500 hover:bg-teal-600 active:bg-teal-700 rounded-xl p-2").
-		WithChildren(
-			retained.Text("Medium", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
-		)
-	refs.HapticHeavyButton = retained.Container("bg-teal-500 hover:bg-teal-600 active:bg-teal-700 rounded-xl p-2").
-		WithChildren(
-			retained.Text("Heavy", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
-		)
-	refs.HapticSelectionBtn = retained.Container("bg-amber-500 hover:bg-amber-600 active:bg-amber-700 rounded-xl p-2").
-		WithChildren(
-			retained.Text("Select", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
-		)
-	refs.HapticSuccessButton = retained.Container("bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 rounded-xl p-2").
-		WithChildren(
-			retained.Text("Success", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("📄 Paste", "text-white text-sm font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	refs.KeyboardStatusText = retained.Text("Tap input to show keyboard", "text-gray-400 text-xs")
-	refs.KeyboardInput = retained.TextField("Type here...", "bg-gray-700 text-white rounded-lg p-3 w-full")
-	refs.KeyboardShowButton = retained.Container("bg-sky-500 hover:bg-sky-600 active:bg-sky-700 rounded-xl p-2").
+	refs.HapticStatusText = ctd.Text("Tap a button to feel haptic", "text-gray-400 text-xs")
+	refs.HapticLightButton = ctd.Container("bg-teal-500 hover:bg-teal-600 active:bg-teal-700 rounded-xl p-2").
 		WithChildren(
-			retained.Text("Show KB", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Light", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
-	refs.KeyboardHideButton = retained.Container("bg-sky-500 hover:bg-sky-600 active:bg-sky-700 rounded-xl p-2").
+	refs.HapticMediumButton = ctd.Container("bg-teal-500 hover:bg-teal-600 active:bg-teal-700 rounded-xl p-2").
 		WithChildren(
-			retained.Text("Hide KB", "text-white text-xs font-semibold").
-				WithPositionMode(retained.PositionRelative),
+			ctd.Text("Medium", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
+		)
+	refs.HapticHeavyButton = ctd.Container("bg-teal-500 hover:bg-teal-600 active:bg-teal-700 rounded-xl p-2").
+		WithChildren(
+			ctd.Text("Heavy", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
+		)
+	refs.HapticSelectionBtn = ctd.Container("bg-amber-500 hover:bg-amber-600 active:bg-amber-700 rounded-xl p-2").
+		WithChildren(
+			ctd.Text("Select", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
+		)
+	refs.HapticSuccessButton = ctd.Container("bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 rounded-xl p-2").
+		WithChildren(
+			ctd.Text("Success", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
 		)
 
-	iosFeaturesCard := retained.VStack("bg-gray-800 rounded-2xl p-4 gap-3 w-full",
-		retained.Text("iOS Features", "text-white text-lg font-semibold"),
-		retained.Text("Test clipboard, haptics, and keyboard", "text-gray-400 text-xs"),
+	refs.KeyboardStatusText = ctd.Text("Tap input to show keyboard", "text-gray-400 text-xs")
+	refs.KeyboardInput = ctd.TextField("Type here...", "bg-gray-700 text-white rounded-lg p-3 w-full")
+	refs.KeyboardShowButton = ctd.Container("bg-sky-500 hover:bg-sky-600 active:bg-sky-700 rounded-xl p-2").
+		WithChildren(
+			ctd.Text("Show KB", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
+		)
+	refs.KeyboardHideButton = ctd.Container("bg-sky-500 hover:bg-sky-600 active:bg-sky-700 rounded-xl p-2").
+		WithChildren(
+			ctd.Text("Hide KB", "text-white text-xs font-semibold").
+				WithPositionMode(ctd.PositionRelative),
+		)
+
+	iosFeaturesCard := ctd.VStack("bg-gray-800 rounded-2xl p-4 gap-3 w-full",
+		ctd.Text("iOS Features", "text-white text-lg font-semibold"),
+		ctd.Text("Test clipboard, haptics, and keyboard", "text-gray-400 text-xs"),
 
 		// Clipboard section
-		retained.Text("Clipboard", "text-white text-sm"),
-		retained.HStack("gap-2 items-center w-full",
+		ctd.Text("Clipboard", "text-white text-sm"),
+		ctd.HStack("gap-2 items-center w-full",
 			refs.ClipboardCopyButton,
 			refs.ClipboardPasteButton,
 			refs.ClipboardStatusText,
 		),
 
 		// Haptic feedback section
-		retained.Text("Haptic Feedback", "text-white text-sm"),
-		retained.HStack("gap-2 items-center w-full flex-wrap",
+		ctd.Text("Haptic Feedback", "text-white text-sm"),
+		ctd.HStack("gap-2 items-center w-full flex-wrap",
 			refs.HapticLightButton,
 			refs.HapticMediumButton,
 			refs.HapticHeavyButton,
@@ -361,9 +361,9 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		refs.HapticStatusText,
 
 		// Keyboard section
-		retained.Text("Keyboard Input", "text-white text-sm"),
+		ctd.Text("Keyboard Input", "text-white text-sm"),
 		refs.KeyboardInput,
-		retained.HStack("gap-2 items-center w-full",
+		ctd.HStack("gap-2 items-center w-full",
 			refs.KeyboardShowButton,
 			refs.KeyboardHideButton,
 			refs.KeyboardStatusText,
@@ -371,10 +371,10 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 	)
 
 	// Footer
-	footer := retained.Text("Built with Centered Framework", "text-gray-600 text-xs")
+	footer := ctd.Text("Built with Centered Framework", "text-gray-600 text-xs")
 
 	// Scrollable content container
-	scrollContent := retained.VStack("gap-2 p-4 w-full",
+	scrollContent := ctd.VStack("gap-2 p-4 w-full",
 		title,
 		subtitle,
 		counterCard,
@@ -390,103 +390,103 @@ func buildDemoUI() (*retained.Widget, *DemoWidgetRefs) {
 		// Media testing section
 		mediaCard,
 		// Add extra items to ensure scrollable content
-		retained.Text("Scroll down for more →", "text-gray-500 text-sm mt-4"),
-		retained.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
-			retained.Text("More Features", "text-white text-lg font-semibold"),
-			retained.Text("✓ Touch scrolling", "text-green-400 text-sm"),
-			retained.Text("✓ Momentum scrolling", "text-green-400 text-sm"),
-			retained.Text("✓ Gesture recognition", "text-green-400 text-sm"),
+		ctd.Text("Scroll down for more →", "text-gray-500 text-sm mt-4"),
+		ctd.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
+			ctd.Text("More Features", "text-white text-lg font-semibold"),
+			ctd.Text("✓ Touch scrolling", "text-green-400 text-sm"),
+			ctd.Text("✓ Momentum scrolling", "text-green-400 text-sm"),
+			ctd.Text("✓ Gesture recognition", "text-green-400 text-sm"),
 		),
-		retained.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
-			retained.Text("Platform Support", "text-white text-lg font-semibold"),
-			retained.Text("✓ macOS", "text-blue-400 text-sm"),
-			retained.Text("✓ iOS", "text-blue-400 text-sm"),
-			retained.Text("○ Android (planned)", "text-gray-500 text-sm"),
-			retained.Text("○ Windows (planned)", "text-gray-500 text-sm"),
-			retained.Text("○ Linux (planned)", "text-gray-500 text-sm"),
+		ctd.VStack("bg-gray-800 rounded-2xl p-4 gap-2 w-full",
+			ctd.Text("Platform Support", "text-white text-lg font-semibold"),
+			ctd.Text("✓ macOS", "text-blue-400 text-sm"),
+			ctd.Text("✓ iOS", "text-blue-400 text-sm"),
+			ctd.Text("○ Android (planned)", "text-gray-500 text-sm"),
+			ctd.Text("○ Windows (planned)", "text-gray-500 text-sm"),
+			ctd.Text("○ Linux (planned)", "text-gray-500 text-sm"),
 		),
 		footer,
 	)
 
 	// Root container with vertical scrolling enabled
 	// Note: flex-col is needed so the container properly calculates content height for scrolling
-	root := retained.VStack("bg-gray-900 w-full h-full overflow-y-auto flex flex-col").
+	root := ctd.VStack("bg-gray-900 w-full h-full overflow-y-auto flex flex-col").
 		WithChildren(scrollContent)
 
 	return root, refs
 }
 
-func setupDemoHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry) {
+func setupDemoHandlers(refs *DemoWidgetRefs, anims *ctd.AnimationRegistry) {
 	// Button 1 - Blue
-	refs.Button1.OnClick(func(e *retained.MouseEvent) {
+	refs.Button1.OnClick(func(e *ctd.MouseEvent) {
 		clickCount++
 		refs.CounterText.SetText(fmt.Sprintf("%d", clickCount))
 		refs.StatusText.SetText("Blue button tapped!")
-		refs.StatusText.SetTextColor(retained.ColorBlue400)
+		refs.StatusText.SetTextColor(ctd.ColorBlue400)
 
 		// Animate
 		refs.Button1.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack).
+			Easing(ctd.EaseOutBack).
 			OnComplete(func() {
 				refs.Button1.Animate(anims).
 					Duration(100 * time.Millisecond)
 			})
 	})
 
-	refs.Button1.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.Button1.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering blue button")
-		refs.StatusText.SetTextColor(retained.ColorBlue400)
+		refs.StatusText.SetTextColor(ctd.ColorBlue400)
 	})
 
 	// Button 2 - Green
-	refs.Button2.OnClick(func(e *retained.MouseEvent) {
+	refs.Button2.OnClick(func(e *ctd.MouseEvent) {
 		clickCount += 2
 		refs.CounterText.SetText(fmt.Sprintf("%d", clickCount))
 		refs.StatusText.SetText("Green button tapped! (+2)")
-		refs.StatusText.SetTextColor(retained.ColorGreen400)
+		refs.StatusText.SetTextColor(ctd.ColorGreen400)
 
 		refs.Button2.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack).
+			Easing(ctd.EaseOutBack).
 			OnComplete(func() {
 				refs.Button2.Animate(anims).
 					Duration(100 * time.Millisecond)
 			})
 	})
 
-	refs.Button2.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.Button2.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering green button")
-		refs.StatusText.SetTextColor(retained.ColorGreen400)
+		refs.StatusText.SetTextColor(ctd.ColorGreen400)
 	})
 
 	// Button 3 - Purple
-	refs.Button3.OnClick(func(e *retained.MouseEvent) {
+	refs.Button3.OnClick(func(e *ctd.MouseEvent) {
 		clickCount += 5
 		refs.CounterText.SetText(fmt.Sprintf("%d", clickCount))
 		refs.StatusText.SetText("Purple button tapped! (+5)")
-		refs.StatusText.SetTextColor(retained.ColorPurple400)
+		refs.StatusText.SetTextColor(ctd.ColorPurple400)
 
 		refs.Button3.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack).
+			Easing(ctd.EaseOutBack).
 			OnComplete(func() {
 				refs.Button3.Animate(anims).
 					Duration(100 * time.Millisecond)
 			})
 	})
 
-	refs.Button3.OnMouseEnter(func(e *retained.MouseEvent) {
+	refs.Button3.OnMouseEnter(func(e *ctd.MouseEvent) {
 		refs.StatusText.SetText("Hovering purple button")
-		refs.StatusText.SetTextColor(retained.ColorPurple400)
+		refs.StatusText.SetTextColor(ctd.ColorPurple400)
 	})
 
 	// Double tap on any button for bonus
-	refs.Button3.OnDoubleClick(func(e *retained.MouseEvent) {
+	refs.Button3.OnDoubleClick(func(e *ctd.MouseEvent) {
 		clickCount += 20
 		refs.CounterText.SetText(fmt.Sprintf("%d", clickCount))
 		refs.StatusText.SetText("DOUBLE TAP BONUS! (+20)")
-		refs.StatusText.SetTextColor(retained.ColorYellow400)
+		refs.StatusText.SetTextColor(ctd.ColorYellow400)
 	})
 
 	// Media handlers
@@ -496,26 +496,26 @@ func setupDemoHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry) 
 	setupIOSFeaturesHandlers(refs, anims)
 }
 
-func setupMediaHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry) {
+func setupMediaHandlers(refs *DemoWidgetRefs, anims *ctd.AnimationRegistry) {
 	// Audio playback handler - uses widget API
-	refs.AudioButton.OnClick(func(e *retained.MouseEvent) {
+	refs.AudioButton.OnClick(func(e *ctd.MouseEvent) {
 		log.Printf("Audio button clicked, playing=%v", audioPlaying)
 
 		if !audioPlaying {
 			refs.AudioWidget.AudioPlay()
 			audioPlaying = true
 			refs.AudioStatusText.SetText("Playing... tap to pause")
-			refs.AudioStatusText.SetTextColor(retained.ColorGreen400)
+			refs.AudioStatusText.SetTextColor(ctd.ColorGreen400)
 		} else {
 			refs.AudioWidget.AudioPause()
 			audioPlaying = false
 			refs.AudioStatusText.SetText("Paused, tap to resume")
-			refs.AudioStatusText.SetTextColor(retained.ColorYellow400)
+			refs.AudioStatusText.SetTextColor(ctd.ColorYellow400)
 		}
 
 		refs.AudioButton.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack)
+			Easing(ctd.EaseOutBack)
 	})
 
 	// Microphone handler - uses widget API
@@ -534,37 +534,37 @@ func setupMediaHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry)
 
 		// Color based on level
 		if level > 0.8 {
-			refs.MicLevelText.SetTextColor(retained.ColorRed400)
+			refs.MicLevelText.SetTextColor(ctd.ColorRed400)
 		} else if level > 0.5 {
-			refs.MicLevelText.SetTextColor(retained.ColorYellow400)
+			refs.MicLevelText.SetTextColor(ctd.ColorYellow400)
 		} else {
-			refs.MicLevelText.SetTextColor(retained.ColorGreen400)
+			refs.MicLevelText.SetTextColor(ctd.ColorGreen400)
 		}
 	})
 
-	refs.MicButton.OnClick(func(e *retained.MouseEvent) {
+	refs.MicButton.OnClick(func(e *ctd.MouseEvent) {
 		log.Printf("Mic button clicked, recording=%v", micRecording)
 
 		if !micRecording {
 			refs.MicWidget.MicrophoneStart()
 			micRecording = true
 			refs.MicStatusText.SetText("Recording... tap to stop")
-			refs.MicStatusText.SetTextColor(retained.ColorRed400)
+			refs.MicStatusText.SetTextColor(ctd.ColorRed400)
 		} else {
 			refs.MicWidget.MicrophoneStop()
 			micRecording = false
 			refs.MicStatusText.SetText("Stopped, tap to record")
-			refs.MicStatusText.SetTextColor(retained.ColorGray400)
+			refs.MicStatusText.SetTextColor(ctd.ColorGray400)
 			refs.MicLevelText.SetText("Level: --")
 		}
 
 		refs.MicButton.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack)
+			Easing(ctd.EaseOutBack)
 	})
 
 	// Video playback handler - uses widget API
-	refs.VideoButton.OnClick(func(e *retained.MouseEvent) {
+	refs.VideoButton.OnClick(func(e *ctd.MouseEvent) {
 		log.Printf("Video button clicked, playing=%v", videoPlaying)
 		log.Printf("Video state: playerID=%d, textureID=%d, loading=%v, error=%v",
 			refs.VideoWidget.VideoPlayerID(),
@@ -577,12 +577,12 @@ func setupMediaHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry)
 			if err != nil {
 				log.Printf("VideoPlay error: %v", err)
 				refs.VideoStatusText.SetText(fmt.Sprintf("Play error: %v", err))
-				refs.VideoStatusText.SetTextColor(retained.ColorRed400)
+				refs.VideoStatusText.SetTextColor(ctd.ColorRed400)
 				return
 			}
 			videoPlaying = true
 			refs.VideoStatusText.SetText("Playing... tap to pause")
-			refs.VideoStatusText.SetTextColor(retained.ColorGreen400)
+			refs.VideoStatusText.SetTextColor(ctd.ColorGreen400)
 		} else {
 			err := refs.VideoWidget.VideoPause()
 			if err != nil {
@@ -590,43 +590,43 @@ func setupMediaHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry)
 			}
 			videoPlaying = false
 			refs.VideoStatusText.SetText("Paused, tap to resume")
-			refs.VideoStatusText.SetTextColor(retained.ColorYellow400)
+			refs.VideoStatusText.SetTextColor(ctd.ColorYellow400)
 		}
 
 		refs.VideoButton.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack)
+			Easing(ctd.EaseOutBack)
 	})
 
 	// Camera handler - uses widget API
-	refs.CameraButton.OnClick(func(e *retained.MouseEvent) {
+	refs.CameraButton.OnClick(func(e *ctd.MouseEvent) {
 		log.Printf("Camera button clicked, active=%v", cameraActive)
 
 		if !cameraActive {
 			refs.CameraWidget.CameraStart()
 			cameraActive = true
 			refs.CameraStatusText.SetText("Camera active, tap to stop")
-			refs.CameraStatusText.SetTextColor(retained.ColorGreen400)
+			refs.CameraStatusText.SetTextColor(ctd.ColorGreen400)
 		} else {
 			refs.CameraWidget.CameraStop()
 			cameraActive = false
 			refs.CameraStatusText.SetText("Stopped, tap to start")
-			refs.CameraStatusText.SetTextColor(retained.ColorGray400)
+			refs.CameraStatusText.SetTextColor(ctd.ColorGray400)
 		}
 
 		refs.CameraButton.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack)
+			Easing(ctd.EaseOutBack)
 	})
 }
 
-func setupIOSFeaturesHandlers(refs *DemoWidgetRefs, anims *retained.AnimationRegistry) {
+func setupIOSFeaturesHandlers(refs *DemoWidgetRefs, anims *ctd.AnimationRegistry) {
 	// Clipboard - Copy button
-	refs.ClipboardCopyButton.OnClick(func(e *retained.MouseEvent) {
+	refs.ClipboardCopyButton.OnClick(func(e *ctd.MouseEvent) {
 		testText := fmt.Sprintf("Centered iOS Demo - copied at %s", time.Now().Format("15:04:05"))
 		ffi.ClipboardSetString(testText)
 		refs.ClipboardStatusText.SetText("Copied!")
-		refs.ClipboardStatusText.SetTextColor(retained.ColorGreen400)
+		refs.ClipboardStatusText.SetTextColor(ctd.ColorGreen400)
 		log.Printf("Clipboard: copied '%s'", testText)
 
 		// Haptic feedback for copy
@@ -634,11 +634,11 @@ func setupIOSFeaturesHandlers(refs *DemoWidgetRefs, anims *retained.AnimationReg
 
 		refs.ClipboardCopyButton.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack)
+			Easing(ctd.EaseOutBack)
 	})
 
 	// Clipboard - Paste button
-	refs.ClipboardPasteButton.OnClick(func(e *retained.MouseEvent) {
+	refs.ClipboardPasteButton.OnClick(func(e *ctd.MouseEvent) {
 		text := ffi.ClipboardGetString()
 		if text != "" {
 			// Truncate for display
@@ -647,11 +647,11 @@ func setupIOSFeaturesHandlers(refs *DemoWidgetRefs, anims *retained.AnimationReg
 				displayText = displayText[:27] + "..."
 			}
 			refs.ClipboardStatusText.SetText(fmt.Sprintf("Pasted: %s", displayText))
-			refs.ClipboardStatusText.SetTextColor(retained.ColorBlue400)
+			refs.ClipboardStatusText.SetTextColor(ctd.ColorBlue400)
 			log.Printf("Clipboard: pasted '%s'", text)
 		} else {
 			refs.ClipboardStatusText.SetText("Clipboard empty")
-			refs.ClipboardStatusText.SetTextColor(retained.ColorYellow400)
+			refs.ClipboardStatusText.SetTextColor(ctd.ColorYellow400)
 		}
 
 		// Haptic feedback for paste
@@ -659,80 +659,80 @@ func setupIOSFeaturesHandlers(refs *DemoWidgetRefs, anims *retained.AnimationReg
 
 		refs.ClipboardPasteButton.Animate(anims).
 			Duration(100 * time.Millisecond).
-			Easing(retained.EaseOutBack)
+			Easing(ctd.EaseOutBack)
 	})
 
 	// Haptic - Light
-	refs.HapticLightButton.OnClick(func(e *retained.MouseEvent) {
+	refs.HapticLightButton.OnClick(func(e *ctd.MouseEvent) {
 		ffi.HapticFeedback(ffi.HapticImpactLight)
 		refs.HapticStatusText.SetText("Light impact!")
-		refs.HapticStatusText.SetTextColor(retained.ColorBlue400)
+		refs.HapticStatusText.SetTextColor(ctd.ColorBlue400)
 		log.Printf("Haptic: light impact")
 	})
 
 	// Haptic - Medium
-	refs.HapticMediumButton.OnClick(func(e *retained.MouseEvent) {
+	refs.HapticMediumButton.OnClick(func(e *ctd.MouseEvent) {
 		ffi.HapticFeedback(ffi.HapticImpactMedium)
 		refs.HapticStatusText.SetText("Medium impact!")
-		refs.HapticStatusText.SetTextColor(retained.ColorBlue400)
+		refs.HapticStatusText.SetTextColor(ctd.ColorBlue400)
 		log.Printf("Haptic: medium impact")
 	})
 
 	// Haptic - Heavy
-	refs.HapticHeavyButton.OnClick(func(e *retained.MouseEvent) {
+	refs.HapticHeavyButton.OnClick(func(e *ctd.MouseEvent) {
 		ffi.HapticFeedback(ffi.HapticImpactHeavy)
 		refs.HapticStatusText.SetText("Heavy impact!")
-		refs.HapticStatusText.SetTextColor(retained.ColorBlue400)
+		refs.HapticStatusText.SetTextColor(ctd.ColorBlue400)
 		log.Printf("Haptic: heavy impact")
 	})
 
 	// Haptic - Selection
-	refs.HapticSelectionBtn.OnClick(func(e *retained.MouseEvent) {
+	refs.HapticSelectionBtn.OnClick(func(e *ctd.MouseEvent) {
 		ffi.HapticFeedback(ffi.HapticSelection)
 		refs.HapticStatusText.SetText("Selection feedback!")
-		refs.HapticStatusText.SetTextColor(retained.ColorYellow400)
+		refs.HapticStatusText.SetTextColor(ctd.ColorYellow400)
 		log.Printf("Haptic: selection")
 	})
 
 	// Haptic - Success notification
-	refs.HapticSuccessButton.OnClick(func(e *retained.MouseEvent) {
+	refs.HapticSuccessButton.OnClick(func(e *ctd.MouseEvent) {
 		ffi.HapticFeedback(ffi.HapticNotificationSuccess)
 		refs.HapticStatusText.SetText("Success notification!")
-		refs.HapticStatusText.SetTextColor(retained.ColorGreen400)
+		refs.HapticStatusText.SetTextColor(ctd.ColorGreen400)
 		log.Printf("Haptic: success notification")
 	})
 
 	// Keyboard - Show button
-	refs.KeyboardShowButton.OnClick(func(e *retained.MouseEvent) {
+	refs.KeyboardShowButton.OnClick(func(e *ctd.MouseEvent) {
 		ffi.KeyboardShow()
 		if ffi.KeyboardIsVisible() {
 			refs.KeyboardStatusText.SetText("Keyboard shown")
-			refs.KeyboardStatusText.SetTextColor(retained.ColorGreen400)
+			refs.KeyboardStatusText.SetTextColor(ctd.ColorGreen400)
 		} else {
 			refs.KeyboardStatusText.SetText("Show keyboard requested")
-			refs.KeyboardStatusText.SetTextColor(retained.ColorYellow400)
+			refs.KeyboardStatusText.SetTextColor(ctd.ColorYellow400)
 		}
 	})
 
 	// Keyboard - Hide button
-	refs.KeyboardHideButton.OnClick(func(e *retained.MouseEvent) {
+	refs.KeyboardHideButton.OnClick(func(e *ctd.MouseEvent) {
 		ffi.KeyboardHide()
 		refs.KeyboardStatusText.SetText("Keyboard hidden")
-		refs.KeyboardStatusText.SetTextColor(retained.ColorGray400)
+		refs.KeyboardStatusText.SetTextColor(ctd.ColorGray400)
 	})
 
 	// Keyboard input - focus handler (also shows keyboard)
-	refs.KeyboardInput.OnFocus(func(e *retained.FocusEvent) {
+	refs.KeyboardInput.OnFocus(func(e *ctd.FocusEvent) {
 		ffi.KeyboardShow()
 		refs.KeyboardStatusText.SetText("Input focused, keyboard shown")
-		refs.KeyboardStatusText.SetTextColor(retained.ColorGreen400)
+		refs.KeyboardStatusText.SetTextColor(ctd.ColorGreen400)
 	})
 
 	// When input loses focus, hide keyboard
-	refs.KeyboardInput.OnBlur(func(e *retained.FocusEvent) {
+	refs.KeyboardInput.OnBlur(func(e *ctd.FocusEvent) {
 		ffi.KeyboardHide()
 		refs.KeyboardStatusText.SetText("Input unfocused, keyboard hidden")
-		refs.KeyboardStatusText.SetTextColor(retained.ColorGray400)
+		refs.KeyboardStatusText.SetTextColor(ctd.ColorGray400)
 	})
 }
 

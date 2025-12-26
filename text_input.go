@@ -1,4 +1,4 @@
-package retained
+package ctd
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/agiangrant/centered/internal/ffi"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 // UndoState captures a snapshot of text buffer state for undo/redo.

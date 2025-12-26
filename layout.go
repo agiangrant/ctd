@@ -1,4 +1,4 @@
-package retained
+package ctd
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/agiangrant/centered/internal/ffi"
+	"github.com/agiangrant/ctd/internal/ffi"
 )
 
 var layoutDebug = false // Set to true for debug logging

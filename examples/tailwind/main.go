@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/agiangrant/centered/internal/ffi"
-	"github.com/agiangrant/centered/retained"
+	"github.com/agiangrant/ctd/internal/ffi"
+	"github.com/agiangrant/ctd"
 )
 
 func init() {
@@ -18,8 +18,8 @@ func init() {
 }
 
 func main() {
-	config := retained.DefaultLoopConfig()
-	loop := retained.NewLoop(config)
+	config := ctd.DefaultLoopConfig()
+	loop := ctd.NewLoop(config)
 	tree := loop.Tree()
 	anims := loop.Animations()
 
@@ -31,9 +31,9 @@ func main() {
 	loop.InitAnimations()
 
 	var clickCount int
-	var counterText *retained.Widget
-	var animatedBox *retained.Widget
-	var animStatusText *retained.Widget
+	var counterText *ctd.Widget
+	var animatedBox *ctd.Widget
+	var animStatusText *ctd.Widget
 
 	findWidgets(root, &counterText, &animatedBox, &animStatusText)
 
@@ -57,12 +57,12 @@ func main() {
 				// Scale animation - grows then shrinks
 				animatedBox.Animate(anims).
 					Duration(200 * time.Millisecond).
-					Easing(retained.EaseOutBack).
+					Easing(ctd.EaseOutBack).
 					OnComplete(func() {
 						// Shrink back
 						animatedBox.Animate(anims).
 							Duration(150 * time.Millisecond).
-							Easing(retained.EaseOutCubic).
+							Easing(ctd.EaseOutCubic).
 							Size(100, 100)
 					}).
 					SizeFromTo(100, 100, 120, 120)
@@ -80,26 +80,26 @@ func main() {
 
 	// OnFrame is called each frame. We only do immediate draws when animations
 	// are active - otherwise we let the system go to event-driven mode.
-	loop.OnFrame(func(frame *retained.Frame) {
+	loop.OnFrame(func(frame *ctd.Frame) {
 		activeCount := anims.Count()
 
 		// Only draw FPS overlay when animations are active
 		// This allows the system to drop to event-driven mode when idle
 		if activeCount > 0 {
 			fps := 1.0 / frame.DeltaTime
-			frame.DrawText(fmt.Sprintf("FPS: %.1f", fps), 900, 10, 14, retained.ColorWhite)
-			frame.DrawText(fmt.Sprintf("Active anims: %d", activeCount), 900, 30, 12, retained.ColorGray400)
-			frame.DrawText(fmt.Sprintf("Cache: %d styles", retained.StyleCacheSize()), 900, 50, 12, retained.ColorGray400)
+			frame.DrawText(fmt.Sprintf("FPS: %.1f", fps), 900, 10, 14, ctd.ColorWhite)
+			frame.DrawText(fmt.Sprintf("Active anims: %d", activeCount), 900, 30, 12, ctd.ColorGray400)
+			frame.DrawText(fmt.Sprintf("Cache: %d styles", ctd.StyleCacheSize()), 900, 50, 12, ctd.ColorGray400)
 		}
 
 		// Update status text (this is a retained widget, not immediate draw)
 		if animStatusText != nil {
 			if activeCount > 0 {
 				animStatusText.SetText(fmt.Sprintf("60 FPS mode (%d anims)", activeCount))
-				animStatusText.SetTextColor(retained.ColorGreen400)
+				animStatusText.SetTextColor(ctd.ColorGreen400)
 			} else {
 				animStatusText.SetText("Event-driven mode (idle)")
-				animStatusText.SetTextColor(retained.ColorGray500)
+				animStatusText.SetTextColor(ctd.ColorGray500)
 			}
 		}
 	})
@@ -122,160 +122,160 @@ func main() {
 }
 
 // buildUI creates the widget tree using Tailwind classes
-func buildUI() *retained.Widget {
+func buildUI() *ctd.Widget {
 	// Root container with Tailwind classes
-	root := retained.Container("bg-gray-900").
+	root := ctd.Container("bg-gray-900").
 		WithSize(1024, 768)
 
 	// Header with Tailwind styling - spans full width
-	header := retained.HStack("bg-gray-800 rounded-lg p-4",
-		retained.Text("Tailwind + Animation Demo", "text-white text-2xl"),
+	header := ctd.HStack("bg-gray-800 rounded-lg p-4",
+		ctd.Text("Tailwind + Animation Demo", "text-white text-2xl"),
 	).WithFrame(20, 20, 984, 50)
 
 	// ============ Column 1 (x=20, width=300) ============
 
 	// Class-based animations demo panel - FEATURED at top!
 	// Using absolute positioned boxes for reliable layout with animations
-	animClassPanel := retained.Container("bg-indigo-900 rounded-xl").
+	animClassPanel := ctd.Container("bg-indigo-900 rounded-xl").
 		WithFrame(20, 90, 300, 220)
 
 	// Title and subtitle
-	animTitle := retained.Text("Class-Based Animations", "text-white text-lg").
+	animTitle := ctd.Text("Class-Based Animations", "text-white text-lg").
 		WithFrame(36, 106, 200, 24)
-	animSubtitle := retained.Text("Just add animate-* classes!", "text-indigo-300 text-xs").
+	animSubtitle := ctd.Text("Just add animate-* classes!", "text-indigo-300 text-xs").
 		WithFrame(36, 132, 200, 16)
 
 	// Row of animated boxes - each positioned absolutely with spacing
 	// animate-pulse - opacity pulses like a heartbeat
-	pulseBox := retained.Container("bg-blue-500 rounded-lg animate-pulse").
+	pulseBox := ctd.Container("bg-blue-500 rounded-lg animate-pulse").
 		WithFrame(36, 156, 50, 50)
-	pulseLabel := retained.Text("pulse", "text-gray-400 text-xs").
+	pulseLabel := ctd.Text("pulse", "text-gray-400 text-xs").
 		WithFrame(36, 210, 50, 16)
 
 	// animate-bounce - bounces up and down
-	bounceBox := retained.Container("bg-green-500 rounded-lg animate-bounce").
+	bounceBox := ctd.Container("bg-green-500 rounded-lg animate-bounce").
 		WithFrame(96, 156, 50, 50)
-	bounceLabel := retained.Text("bounce", "text-gray-400 text-xs").
+	bounceLabel := ctd.Text("bounce", "text-gray-400 text-xs").
 		WithFrame(92, 210, 50, 16)
 
 	// animate-spin - rotates (color shift placeholder)
-	spinBox := retained.Container("bg-purple-500 rounded-lg animate-spin").
+	spinBox := ctd.Container("bg-purple-500 rounded-lg animate-spin").
 		WithFrame(156, 156, 50, 50)
-	spinLabel := retained.Text("spin", "text-gray-400 text-xs").
+	spinLabel := ctd.Text("spin", "text-gray-400 text-xs").
 		WithFrame(160, 210, 50, 16)
 
 	// animate-ping - scales up and fades
-	pingBox := retained.Container("bg-red-500 rounded-lg animate-ping").
+	pingBox := ctd.Container("bg-red-500 rounded-lg animate-ping").
 		WithFrame(216, 156, 50, 50)
-	pingLabel := retained.Text("ping", "text-gray-400 text-xs").
+	pingLabel := ctd.Text("ping", "text-gray-400 text-xs").
 		WithFrame(220, 210, 50, 16)
 
 	// Custom animation row - fast pulse with elastic easing!
-	fastBox := retained.Container("bg-yellow-500 rounded-lg animate-[pulse_500ms_elastic]").
+	fastBox := ctd.Container("bg-yellow-500 rounded-lg animate-[pulse_500ms_elastic]").
 		WithFrame(36, 236, 50, 50)
-	fastLabel := retained.Text("fast", "text-gray-400 text-xs").
+	fastLabel := ctd.Text("fast", "text-gray-400 text-xs").
 		WithFrame(36, 290, 50, 16)
-	fastSyntax := retained.Text("animate-[pulse_500ms_elastic]", "text-indigo-200 text-xs").
+	fastSyntax := ctd.Text("animate-[pulse_500ms_elastic]", "text-indigo-200 text-xs").
 		WithFrame(96, 254, 200, 16)
 
 	// Counter panel
-	counterPanel := retained.VStack("bg-blue-900 rounded-xl p-4 gap-2",
-		retained.Text("Interactive Counter", "text-gray-300 text-sm"),
-		retained.Text("Clicks: 0", "text-white text-2xl").
+	counterPanel := ctd.VStack("bg-blue-900 rounded-xl p-4 gap-2",
+		ctd.Text("Interactive Counter", "text-gray-300 text-sm"),
+		ctd.Text("Clicks: 0", "text-white text-2xl").
 			WithData("counterText"),
-		retained.Text("(click anywhere to bounce)", "text-gray-500 text-xs"),
+		ctd.Text("(click anywhere to bounce)", "text-gray-500 text-xs"),
 	).WithFrame(20, 310, 300, 110)
 
 	// Animated box panel - click to animate
-	animPanel := retained.VStack("bg-blue-900 rounded-xl p-4 gap-2",
-		retained.Text("Click-Triggered Animation", "text-gray-300 text-sm"),
-		retained.Container("bg-blue-500 rounded-lg w-[80px] h-[80px]").
+	animPanel := ctd.VStack("bg-blue-900 rounded-xl p-4 gap-2",
+		ctd.Text("Click-Triggered Animation", "text-gray-300 text-sm"),
+		ctd.Container("bg-blue-500 rounded-lg w-[80px] h-[80px]").
 			WithData("animatedBox"),
-		retained.Text("Bounces on click", "text-gray-500 text-xs"),
+		ctd.Text("Bounces on click", "text-gray-500 text-xs"),
 	).WithFrame(20, 440, 300, 150)
 
 	// Animation status panel
-	statusPanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-1",
-		retained.Text("Render Mode:", "text-white text-sm"),
-		retained.Text("Checking...", "text-gray-500 text-base").
+	statusPanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-1",
+		ctd.Text("Render Mode:", "text-white text-sm"),
+		ctd.Text("Checking...", "text-gray-500 text-base").
 			WithData("animStatusText"),
-		retained.Text("When animations active: 60 FPS", "text-gray-600 text-xs"),
-		retained.Text("When idle: event-driven", "text-gray-600 text-xs"),
+		ctd.Text("When animations active: 60 FPS", "text-gray-600 text-xs"),
+		ctd.Text("When idle: event-driven", "text-gray-600 text-xs"),
 	).WithFrame(20, 610, 300, 110)
 
 	// ============ Column 2 (x=340, width=320) ============
 
 	// Code example for class-based animations
-	animClassCodePanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-2",
-		retained.Text("Class-Based Usage:", "text-yellow-400 text-sm"),
-		retained.Text("retained.Container(", "text-gray-300 text-xs"),
-		retained.Text("  \"bg-blue-500 animate-pulse\"", "text-green-400 text-xs"),
-		retained.Text(")", "text-gray-300 text-xs"),
-		retained.Text("", "text-gray-300 text-xs"),
-		retained.Text("loop.InitAnimations() // auto-start", "text-gray-400 text-xs"),
+	animClassCodePanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-2",
+		ctd.Text("Class-Based Usage:", "text-yellow-400 text-sm"),
+		ctd.Text("ctd.Container(", "text-gray-300 text-xs"),
+		ctd.Text("  \"bg-blue-500 animate-pulse\"", "text-green-400 text-xs"),
+		ctd.Text(")", "text-gray-300 text-xs"),
+		ctd.Text("", "text-gray-300 text-xs"),
+		ctd.Text("loop.InitAnimations() // auto-start", "text-gray-400 text-xs"),
 	).WithFrame(340, 90, 320, 140)
 
 	// Programmatic animation example
-	codePanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-2",
-		retained.Text("Programmatic Animation:", "text-yellow-400 text-sm"),
-		retained.Text("box.Animate(anims).", "text-gray-300 text-xs"),
-		retained.Text("  Duration(200*time.Millisecond).", "text-gray-300 text-xs"),
-		retained.Text("  Easing(EaseOutBack).", "text-gray-300 text-xs"),
-		retained.Text("  Size(120, 120)", "text-gray-300 text-xs"),
+	codePanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-2",
+		ctd.Text("Programmatic Animation:", "text-yellow-400 text-sm"),
+		ctd.Text("box.Animate(anims).", "text-gray-300 text-xs"),
+		ctd.Text("  Duration(200*time.Millisecond).", "text-gray-300 text-xs"),
+		ctd.Text("  Easing(EaseOutBack).", "text-gray-300 text-xs"),
+		ctd.Text("  Size(120, 120)", "text-gray-300 text-xs"),
 	).WithFrame(340, 250, 320, 130)
 
 	// Info panel showing animation features
-	infoPanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-1",
-		retained.Text("Animation Features:", "text-white text-sm"),
-		retained.Text("• Automatic 60 FPS mode switching", "text-gray-400 text-xs"),
-		retained.Text("• Easing: cubic, back, elastic, bounce", "text-gray-400 text-xs"),
-		retained.Text("• Properties: color, size, position, opacity", "text-gray-400 text-xs"),
-		retained.Text("• Looping + OnComplete callbacks", "text-gray-400 text-xs"),
-		retained.Text("• Single FFI call per frame", "text-gray-400 text-xs"),
+	infoPanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-1",
+		ctd.Text("Animation Features:", "text-white text-sm"),
+		ctd.Text("• Automatic 60 FPS mode switching", "text-gray-400 text-xs"),
+		ctd.Text("• Easing: cubic, back, elastic, bounce", "text-gray-400 text-xs"),
+		ctd.Text("• Properties: color, size, position, opacity", "text-gray-400 text-xs"),
+		ctd.Text("• Looping + OnComplete callbacks", "text-gray-400 text-xs"),
+		ctd.Text("• Single FFI call per frame", "text-gray-400 text-xs"),
 	).WithFrame(340, 400, 320, 140)
 
 	// Color palette demo
-	colorPanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-2",
-		retained.Text("Color Palette (Tailwind)", "text-white text-sm"),
-		retained.HStack("gap-2",
-			retained.Container("bg-red-500 rounded w-[35px] h-[35px]"),
-			retained.Container("bg-orange-500 rounded w-[35px] h-[35px]"),
-			retained.Container("bg-yellow-500 rounded w-[35px] h-[35px]"),
-			retained.Container("bg-green-500 rounded w-[35px] h-[35px]"),
-			retained.Container("bg-blue-500 rounded w-[35px] h-[35px]"),
-			retained.Container("bg-purple-500 rounded w-[35px] h-[35px]"),
+	colorPanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-2",
+		ctd.Text("Color Palette (Tailwind)", "text-white text-sm"),
+		ctd.HStack("gap-2",
+			ctd.Container("bg-red-500 rounded w-[35px] h-[35px]"),
+			ctd.Container("bg-orange-500 rounded w-[35px] h-[35px]"),
+			ctd.Container("bg-yellow-500 rounded w-[35px] h-[35px]"),
+			ctd.Container("bg-green-500 rounded w-[35px] h-[35px]"),
+			ctd.Container("bg-blue-500 rounded w-[35px] h-[35px]"),
+			ctd.Container("bg-purple-500 rounded w-[35px] h-[35px]"),
 		),
 	).WithFrame(340, 560, 320, 90)
 
 	// ============ Column 3 (x=680, width=320) ============
 
 	// FLEXBOX DEMO - showcase new layout features!
-	flexDemoPanel := retained.Container("bg-emerald-900 rounded-xl flex flex-col gap-2 p-4").
+	flexDemoPanel := ctd.Container("bg-emerald-900 rounded-xl flex flex-col gap-2 p-4").
 		WithFrame(680, 90, 320, 180)
 
-	flexTitle := retained.Text("Flexbox Layout Demo", "text-white text-lg").
+	flexTitle := ctd.Text("Flexbox Layout Demo", "text-white text-lg").
 		WithSize(300, 24)
 
 	// Row of boxes using flex-row with justify-between
-	flexRow := retained.Container("flex flex-row justify-between items-center gap-2").
+	flexRow := ctd.Container("flex flex-row justify-between items-center gap-2").
 		WithSize(280, 50)
 	for i := 0; i < 4; i++ {
 		colors := []string{"bg-red-500", "bg-yellow-500", "bg-green-500", "bg-blue-500"}
-		box := retained.Container(colors[i] + " rounded").
+		box := ctd.Container(colors[i] + " rounded").
 			WithSize(60, 40)
 		flexRow.AddChild(box)
 	}
 
 	// Row with justify-center
-	flexCenterRow := retained.Container("flex flex-row justify-center gap-4").
+	flexCenterRow := ctd.Container("flex flex-row justify-center gap-4").
 		WithSize(280, 40)
 	for i := 0; i < 3; i++ {
-		box := retained.Container("bg-purple-500 rounded").
+		box := ctd.Container("bg-purple-500 rounded").
 			WithSize(40, 30)
 		flexCenterRow.AddChild(box)
 	}
 
-	flexLabel := retained.Text("flex flex-row justify-between", "text-emerald-300 text-xs").
+	flexLabel := ctd.Text("flex flex-row justify-between", "text-emerald-300 text-xs").
 		WithSize(280, 16)
 
 	flexDemoPanel.WithChildren(
@@ -283,38 +283,38 @@ func buildUI() *retained.Widget {
 		flexRow,
 		flexLabel,
 		flexCenterRow,
-		retained.Text("flex flex-row justify-center", "text-emerald-300 text-xs").WithSize(280, 16),
+		ctd.Text("flex flex-row justify-center", "text-emerald-300 text-xs").WithSize(280, 16),
 	)
 
 	// Available animations list
-	availableAnimsPanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-1",
-		retained.Text("Available Animations:", "text-white text-sm"),
-		retained.Text("animate-pulse    - Opacity fade in/out", "text-gray-400 text-xs"),
-		retained.Text("animate-bounce   - Vertical bounce", "text-gray-400 text-xs"),
-		retained.Text("animate-spin     - Color rotation*", "text-gray-400 text-xs"),
-		retained.Text("animate-ping     - Scale + fade out", "text-gray-400 text-xs"),
-		retained.Text("animate-none     - Stop animation", "text-gray-400 text-xs"),
-		retained.Text("", "text-gray-600 text-xs"),
-		retained.Text("*spin uses color shift (no rotation yet)", "text-gray-600 text-xs"),
+	availableAnimsPanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-1",
+		ctd.Text("Available Animations:", "text-white text-sm"),
+		ctd.Text("animate-pulse    - Opacity fade in/out", "text-gray-400 text-xs"),
+		ctd.Text("animate-bounce   - Vertical bounce", "text-gray-400 text-xs"),
+		ctd.Text("animate-spin     - Color rotation*", "text-gray-400 text-xs"),
+		ctd.Text("animate-ping     - Scale + fade out", "text-gray-400 text-xs"),
+		ctd.Text("animate-none     - Stop animation", "text-gray-400 text-xs"),
+		ctd.Text("", "text-gray-600 text-xs"),
+		ctd.Text("*spin uses color shift (no rotation yet)", "text-gray-600 text-xs"),
 	).WithFrame(680, 290, 320, 160)
 
 	// Easing functions list
-	easingPanel := retained.VStack("bg-gray-800 rounded-lg p-4 gap-1",
-		retained.Text("Easing Functions:", "text-white text-sm"),
-		retained.Text("EaseLinear       - Constant speed", "text-gray-400 text-xs"),
-		retained.Text("EaseInOutCubic   - Smooth start/end", "text-gray-400 text-xs"),
-		retained.Text("EaseOutBack      - Overshoot bounce", "text-gray-400 text-xs"),
-		retained.Text("EaseOutElastic   - Elastic wobble", "text-gray-400 text-xs"),
-		retained.Text("EaseOutBounce    - Bouncing stop", "text-gray-400 text-xs"),
+	easingPanel := ctd.VStack("bg-gray-800 rounded-lg p-4 gap-1",
+		ctd.Text("Easing Functions:", "text-white text-sm"),
+		ctd.Text("EaseLinear       - Constant speed", "text-gray-400 text-xs"),
+		ctd.Text("EaseInOutCubic   - Smooth start/end", "text-gray-400 text-xs"),
+		ctd.Text("EaseOutBack      - Overshoot bounce", "text-gray-400 text-xs"),
+		ctd.Text("EaseOutElastic   - Elastic wobble", "text-gray-400 text-xs"),
+		ctd.Text("EaseOutBounce    - Bouncing stop", "text-gray-400 text-xs"),
 	).WithFrame(680, 470, 320, 140)
 
 	// Coming soon panel
-	comingSoonPanel := retained.VStack("bg-gray-700 rounded-lg p-4 gap-1",
-		retained.Text("Flexbox Classes:", "text-emerald-400 text-sm"),
-		retained.Text("• flex flex-row flex-col", "text-gray-400 text-xs"),
-		retained.Text("• justify-start/center/end/between/around", "text-gray-400 text-xs"),
-		retained.Text("• items-start/center/end/stretch", "text-gray-400 text-xs"),
-		retained.Text("• flex-grow flex-shrink", "text-gray-400 text-xs"),
+	comingSoonPanel := ctd.VStack("bg-gray-700 rounded-lg p-4 gap-1",
+		ctd.Text("Flexbox Classes:", "text-emerald-400 text-sm"),
+		ctd.Text("• flex flex-row flex-col", "text-gray-400 text-xs"),
+		ctd.Text("• justify-start/center/end/between/around", "text-gray-400 text-xs"),
+		ctd.Text("• items-start/center/end/stretch", "text-gray-400 text-xs"),
+		ctd.Text("• flex-grow flex-shrink", "text-gray-400 text-xs"),
 	).WithFrame(680, 630, 320, 110)
 
 	root.WithChildren(
@@ -338,7 +338,7 @@ func buildUI() *retained.Widget {
 	return root
 }
 
-func findWidgets(w *retained.Widget, counterText, animatedBox, animStatusText **retained.Widget) {
+func findWidgets(w *ctd.Widget, counterText, animatedBox, animStatusText **ctd.Widget) {
 	if data := w.Data(); data != nil {
 		switch data {
 		case "counterText":
