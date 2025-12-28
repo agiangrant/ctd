@@ -1,0 +1,408 @@
+# CTD Framework - LLM Reference
+
+Cross-platform GUI framework: Rust engine + Go API. Tailwind-style classes.
+
+## Installation
+
+```go
+import "github.com/agiangrant/ctd"
+```
+
+Requires: Go 1.21+, Rust 1.70+, Task (taskfile.dev)
+
+## Minimal Example
+
+```go
+package main
+
+import (
+    "runtime"
+    "github.com/agiangrant/ctd"
+    "github.com/agiangrant/ctd/internal/ffi"
+)
+
+func init() { runtime.LockOSThread() }
+
+func main() {
+    loop := ctd.NewLoop(ctd.DefaultLoopConfig())
+    root := ctd.VStack("bg-gray-900 p-4 gap-4",
+        ctd.Text("Hello", "text-white text-2xl"),
+        ctd.Button("Click", "").OnClick(func() { println("clicked") }),
+    )
+    loop.Tree().SetRoot(root)
+    loop.Run(ffi.AppConfig{Title: "App", Width: 800, Height: 600})
+}
+```
+
+## Build Commands
+
+```bash
+task build          # Build Rust engine (debug)
+task build:release  # Build optimized
+task test           # Run Rust tests
+task ci             # Full CI (fmt, clippy, test, build)
+go test ./tw/       # Go tests
+```
+
+## Widget Constructors
+
+All constructors: `func Name(args, classes string) *Widget`
+
+### Layout
+```go
+Container(classes)                      // Generic box
+VStack(classes, children...)            // Vertical stack
+HStack(classes, children...)            // Horizontal stack
+ZStack(classes, children...)            // Layered stack
+ScrollView(classes, children...)        // Scrollable container
+Flex(classes, children...)              // Respects flex-direction from classes
+```
+
+### Text
+```go
+Text(text, classes)
+Button(text, classes)
+```
+
+### Media
+```go
+Image(textureID, classes)               // From pre-loaded texture
+ImageFromSource(path, classes)          // From file/URL
+Video(source, classes)
+Audio(source, classes)
+Camera(classes)                         // Video input
+Microphone(classes)                     // Audio input
+```
+
+### Form Controls
+```go
+TextField(placeholder, classes)
+Checkbox(label, classes)
+Toggle(classes)                         // iOS-style switch
+Radio(label, group, classes)
+Slider(classes)
+Select(placeholder, classes)
+```
+
+### System
+```go
+Clipboard()
+FilePicker()
+TrayIcon()
+```
+
+## Widget Methods (Fluent API)
+
+### Chaining Builders
+```go
+.WithChildren(children...)
+.WithFrame(x, y, w, h)
+.WithSize(w, h)
+.WithPosition(x, y)
+.WithBackground(color)
+.WithBorder(width, color)
+.WithCornerRadius(r)
+.WithOpacity(0-1)
+.WithPadding(p)
+.WithPaddingXY(h, v)
+.WithGap(gap)
+.WithText(text)
+.WithTextStyle(color, size)
+.WithData(any)
+.WithPositionMode(PositionAbsolute|PositionRelative|PositionFixed)
+```
+
+### Setters (return *Widget for chaining)
+```go
+.SetClasses(classes)
+.SetPosition(x, y)
+.SetSize(w, h)
+.SetFrame(x, y, w, h)
+.SetBackgroundColor(color)
+.SetBorder(width, color)
+.SetCornerRadius(r)
+.SetOpacity(0-1)
+.SetVisible(bool)
+.SetText(text)
+.SetTextColor(color)
+.SetFontSize(size)
+.SetFontName(name)
+.SetPadding(p)
+.SetGap(gap)
+.SetFlexGrow(grow)
+.SetWidthPercent(pct)
+.SetHeightPercent(pct)
+.SetWidthFull()
+.SetHeightFull()
+.AddChild(widget)
+.RemoveChild(widget)
+```
+
+### Getters
+```go
+.ID() WidgetID
+.Kind() WidgetKind
+.Parent() *Widget
+.Children() []*Widget
+.Classes() string
+.Checked() bool           // Checkbox/Toggle
+.SliderValue() float32
+.SelectedIndex() int      // Select
+.SelectedValue() any
+```
+
+### Events
+```go
+.OnClick(func(e *MouseEvent))
+.OnMouseDown(func(e *MouseEvent))
+.OnMouseUp(func(e *MouseEvent))
+.OnMouseEnter(func())
+.OnMouseLeave(func())
+.OnKeyDown(func(e *KeyEvent))
+.OnKeyUp(func(e *KeyEvent))
+.OnFocus(func())
+.OnBlur(func())
+.OnChange(func(value any))   // For form controls
+```
+
+### Control-Specific
+```go
+// Checkbox/Toggle
+.SetChecked(bool)
+.SetOn(bool)               // Toggle alias
+
+// Slider
+.SetSliderValue(float32)
+.SetSliderRange(min, max)
+.SetSliderStep(step)
+
+// Select
+.SetSelectOptions([]SelectOption)
+.SetSelectedIndex(int)
+
+// Video
+.WithAutoplay()
+.WithLoop()
+.WithMuted()
+.WithVolume(0-1)
+.OnVideoEnded(func())
+
+// Audio
+.WithAudioAutoplay()
+.WithAudioLoop()
+.WithAudioVolume(0-1)
+.OnAudioEnded(func())
+```
+
+## Animation
+
+```go
+// Class-based (auto-starts with loop.InitAnimations())
+Container("bg-blue-500 animate-pulse")
+Container("animate-bounce")
+Container("animate-spin")
+Container("animate-ping")
+Container("animate-[pulse_500ms_elastic]")  // Custom
+
+// Programmatic
+widget.Animate(loop.Animations()).
+    Duration(200 * time.Millisecond).
+    Easing(ctd.EaseOutBack).
+    Size(120, 120)
+
+// Easing functions
+EaseLinear, EaseOutCubic, EaseInOutCubic, EaseOutBack, EaseOutElastic, EaseOutBounce
+```
+
+## Loop API
+
+```go
+loop := ctd.NewLoop(ctd.DefaultLoopConfig())
+loop.Tree().SetRoot(root)
+loop.Animations() *AnimationRegistry
+loop.InitAnimations()  // Start class-based animations
+
+loop.OnResize(func(w, h float32))
+loop.OnEvent(func(event ffi.Event) bool)
+loop.OnFrame(func(frame *ctd.Frame))
+
+loop.Run(ffi.AppConfig{Title, Width, Height})
+```
+
+### Frame (immediate mode draws)
+```go
+frame.DrawRect(x, y, w, h, color, cornerRadius)
+frame.DrawText(text, x, y, fontSize, color)
+frame.DeltaTime float64
+frame.Number uint64
+```
+
+## Colors
+
+```go
+// Helpers
+RGB(r, g, b uint8) uint32
+RGBA(r, g, b, a uint8) uint32
+Hex("#FF5500") uint32
+
+// Constants (Tailwind palette)
+ColorWhite, ColorBlack, ColorTransparent
+ColorGray50...ColorGray900
+ColorBlue50...ColorBlue900
+ColorRed50...ColorRed900
+ColorGreen50...ColorGreen900
+ColorYellow50...ColorYellow900
+ColorPurple50...ColorPurple900
+```
+
+## Tailwind Classes
+
+### Layout
+```
+flex flex-row flex-col
+justify-start justify-center justify-end justify-between justify-around
+items-start items-center items-end items-stretch
+gap-{0-16} gap-x-{n} gap-y-{n}
+```
+
+### Sizing
+```
+w-{0-96} w-full w-auto w-[100px] w-[50%]
+h-{0-96} h-full h-auto h-[200px]
+min-w-{n} max-w-{n} min-h-{n} max-h-{n}
+```
+
+### Spacing
+```
+p-{0-16} px-{n} py-{n} pt-{n} pr-{n} pb-{n} pl-{n}
+m-{0-16} mx-{n} my-{n} mt-{n} mr-{n} mb-{n} ml-{n}
+```
+
+### Colors (19 colors × 11 shades: 50-900)
+```
+bg-{color}-{shade}      # Background
+text-{color}-{shade}    # Text color
+border-{color}-{shade}  # Border color
+
+Colors: slate gray zinc neutral stone red orange amber yellow lime
+        green emerald teal cyan sky blue indigo violet purple fuchsia pink rose
+```
+
+### Typography
+```
+text-xs text-sm text-base text-lg text-xl text-2xl text-3xl text-4xl
+font-thin font-light font-normal font-medium font-semibold font-bold
+text-left text-center text-right
+```
+
+### Borders
+```
+rounded rounded-sm rounded-md rounded-lg rounded-xl rounded-full rounded-none
+border border-{0-8}
+```
+
+### Effects
+```
+opacity-{0-100}
+shadow-sm shadow shadow-md shadow-lg shadow-xl shadow-2xl
+```
+
+### State Variants
+```
+hover:bg-blue-600
+focus:border-blue-500
+active:bg-blue-700
+disabled:opacity-50
+```
+
+### Responsive
+```
+sm:flex-col    # 640px+
+md:flex-row    # 768px+
+lg:gap-8       # 1024px+
+xl:p-8         # 1280px+
+2xl:text-xl    # 1536px+
+```
+
+### Dark Mode
+```
+dark:bg-gray-900
+dark:text-white
+```
+
+### Animations
+```
+animate-pulse animate-bounce animate-spin animate-ping animate-none
+animate-[type_duration_easing]
+```
+
+## Types
+
+```go
+type WidgetKind string  // KindContainer, KindVStack, KindHStack, KindText, KindButton, etc.
+type WidgetID uint64
+type Position int       // PositionStatic, PositionRelative, PositionAbsolute, PositionFixed
+
+type SelectOption struct {
+    Label    string
+    Value    any
+    Disabled bool
+}
+
+type FileFilter struct {
+    Name       string
+    Extensions []string  // Without dots: {"png", "jpg"}
+}
+
+type MenuItem struct {
+    Label     string
+    Enabled   bool
+    Checked   bool
+    Separator bool
+    OnClick   func()
+}
+```
+
+## FFI (internal/ffi)
+
+```go
+import "github.com/agiangrant/ctd/internal/ffi"
+
+ffi.AppConfig{Title, Width, Height, Resizable, Decorated, Transparent}
+ffi.DefaultAppConfig() AppConfig
+
+// Events
+ffi.Event{Type, MouseX(), MouseY(), Keycode(), Modifiers()}
+ffi.EventReady, EventResized, EventRedrawRequested
+ffi.EventMouseMoved, EventMousePressed, EventMouseReleased
+ffi.EventKeyPressed, EventKeyReleased, EventTextInput
+ffi.EventCloseRequested
+
+// Keys
+ffi.KeyEscape, KeyEnter, KeySpace, KeyBackspace, KeyTab, KeyLeft, KeyRight, KeyUp, KeyDown
+
+// Images
+ffi.LoadImage([]byte) (uint32, error)
+ffi.LoadImageFile(path) (uint32, error)
+ffi.UnloadImage(textureID)
+
+// System
+ffi.RequestExit()
+ffi.RequestRedraw()
+ffi.IsDarkMode() bool
+ffi.GetClipboard() string
+ffi.SetClipboard(text)
+ffi.ShowKeyboard()
+ffi.HideKeyboard()
+```
+
+## tw Package (Tailwind Parser)
+
+```go
+import "github.com/agiangrant/ctd/tw"
+
+styles := tw.ParseClasses("bg-blue-500 hover:bg-blue-600 text-white px-4")
+styles.Base.BackgroundColor  // *uint32
+styles.Hover.BackgroundColor
+styles.Dark.Base.BackgroundColor
+```

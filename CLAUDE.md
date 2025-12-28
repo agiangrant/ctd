@@ -10,81 +10,85 @@ CTD is a cross-platform native GUI framework combining Rust's performance with G
 
 ## Build Commands
 
-The project uses Task (Taskfile.yml) for build automation:
+The project uses Task (Taskfile.yml) for build automation.
+
+### Core Development (Rust Engine)
 
 ```bash
-# Build Rust engine (debug)
-task build
-
-# Build Rust engine (release/optimized)
-task build:release
-
-# Run tests
-task test
-
-# Run tests in watch mode
-task test:watch
-
-# Format Rust code
-task fmt
-
-# Check formatting without modifying
-task fmt:check
-
-# Run Clippy linter (fails on warnings)
-task clippy
-
-# Check code without building
-task check
-
-# Run all CI checks (format, clippy, test, build)
-task ci
-
-# Development mode - watch and rebuild on changes
-task dev
-
-# Generate and open documentation
-task doc
-
-# Clean build artifacts
-task clean
-
-# Generate Tailwind utility classes from theme.toml
-task generate
-
-# Watch theme.toml and regenerate on changes
-task generate:watch
+task build              # Build Rust engine (debug)
+task build:release      # Build Rust engine (optimized)
+task test               # Run Rust tests
+task test:watch         # Run tests in watch mode
+task fmt                # Format Rust code
+task fmt:check          # Check formatting
+task clippy             # Run Clippy linter (fails on warnings)
+task ci                 # Run all CI checks (fmt, clippy, test, build)
+task dev                # Watch and rebuild on changes
+task generate           # Generate Tailwind classes from theme.toml
 ```
 
-The engine crate builds as lib, cdylib, and staticlib for FFI consumption by Go.
+### Running a Single Rust Test
+
+```bash
+cd engine && cargo test test_name           # Run specific test
+cd engine && cargo test module::test_name   # Run test in module
+cd engine && cargo test -- --nocapture      # Show println! output
+```
 
 ### Go Commands
 
 ```bash
-# Run Go tests (Tailwind parser)
-go test -v ./tw/
+go test -v ./tw/                      # Run Tailwind parser tests
+go test -v ./tw/ -run TestName        # Run specific Go test
+go test -bench=. -benchmem ./tw/      # Run benchmarks
+go build -o bin/example ./examples/demo/  # Build example (requires Rust engine)
+```
 
-# Run benchmarks
-go test -bench=. -benchmem ./tw/
+### Platform Builds
 
-# Build example application (requires Rust engine to be built first)
-cd engine && cargo build --release && cd ..
-go build -o bin/example ./examples/demo/
+```bash
+# iOS
+task ios:build          # Build for iOS device (aarch64-apple-ios)
+task ios:build:sim      # Build for iOS simulator
+task ios:run            # Build and run on simulator
 
-# Generate Tailwind utilities
-go run tools/generate/main.go
+# Android
+task android:build      # Build for Android device (aarch64-linux-android)
+task android:run        # Build, deploy, and run on device/emulator
+
+# Web/WASM
+task web:build          # Build Rust + Go for WebAssembly
+task web:serve          # Serve at http://localhost:8080
+```
+
+### CTD CLI Tool
+
+The CLI (`cmd/ctd/`) provides project management commands:
+
+```bash
+go run ./cmd/ctd init           # Initialize new project with ctd.toml
+go run ./cmd/ctd dev            # Development with hot reload
+go run ./cmd/ctd generate       # Generate tw/generated.go from theme.toml
+go run ./cmd/ctd build-macos    # Build for macOS (--universal for universal binary)
+go run ./cmd/ctd build-ios --simulator  # Build for iOS
+go run ./cmd/ctd run-ios        # Build and run on iOS simulator
+go run ./cmd/ctd create-ios     # Create Xcode project from ctd.toml
+go run ./cmd/ctd create-android # Create Android Studio project
 ```
 
 ## Architecture
 
 ### Two-Layer Design
 
-**Rust Engine (`engine/`)**: Platform abstraction, rendering backends, widget primitives, layout engine (flexbox), style system (Tailwind utilities), event dispatch. Designed for zero-cost abstractions and minimal FFI overhead.
+**Rust Engine (`engine/`)**: Platform abstraction, rendering backends, widget primitives, layout engine (flexbox), style system (Tailwind utilities), event dispatch, audio/video playback. Designed for zero-cost abstractions and minimal FFI overhead.
 
-**Go Framework** (implemented): Idiomatic Go API with Tailwind-first styling, widget composition, FFI bindings. Located in:
-- `internal/ffi/ffi.go`: CGO bindings to Rust engine
+**Go Framework**: Idiomatic Go API with Tailwind-first styling, widget composition, FFI bindings. Located in:
+- `internal/ffi/ffi.go`: CGO bindings to Rust engine (platform-specific: `ffi_unix.go`, `ffi_windows.go`, `ffi_js.go`)
 - Root package (`ctd`): Widget system with layout, events, animation, and state management
 - `tw/`: Complete Tailwind CSS parser with 2,117+ utility classes and arbitrary value support
+- `cmd/ctd/`: CLI tool for project initialization, builds, and hot reload
+
+**Supported Platforms**: macOS, iOS, Android, Linux, Windows, Web/WASM (see `engine/src/platform/`)
 
 ### Rendering Modes
 
@@ -384,52 +388,32 @@ Immediate mode uses `CommandBuffer` with `Vec<RenderCommand>`:
 
 The primary rendering backend uses **wgpu** (`platform/wgpu_backend.rs`) which provides cross-platform GPU access via Metal (macOS/iOS), Vulkan (Linux/Android), and D3D12 (Windows).
 
-**iOS Platform** (`platform/ios.rs`):
-- Direct UIKit integration bypassing winit for proper iOS lifecycle
-- CAMetalLayer-backed UIView with wgpu rendering
-- Multi-touch support with gesture detection (tap vs drag)
-- Software keyboard via UIKeyInput protocol conformance
-- Hardware keyboard via UIPress event handling
-- Keyboard frame notifications for avoidance animations
-- Safe area insets support
-- Device orientation handling
-- App lifecycle events (suspend/resume)
+**Platform-specific implementations**:
+- `platform/macos.rs` - macOS windowing, dialogs, notifications
+- `platform/ios.rs` - iOS UIKit integration, software keyboard, touch
+- `platform/android.rs` - Android native activity, JNI bridge
+- `platform/linux/` - X11/Wayland, GTK dialogs, system tray, D-Bus portals
+- `platform/windows/` - Win32, system tray, window styling
+- `platform/web.rs` - WASM/WebGL via web-sys
 
-**wgpu Backend Features** (fully implemented):
-- ✅ Rectangles with rounded corners (per-corner radii)
-- ✅ Borders with configurable width and color
-- ✅ Linear gradients (horizontal, vertical, diagonal)
-- ✅ Soft shadows with blur and offset
-- ✅ Text rendering via Core Text (macOS) with glyph atlas caching
-- ✅ Font weights (100-900), styles (normal/italic)
-- ✅ Multi-line text with word wrapping
-- ✅ Text overflow with ellipsis (single-line, multi-line, height-based)
-- ✅ Letter spacing and word spacing
-- ✅ Clipping regions (scissor rects)
-- ✅ Image rendering (PNG, JPEG) with texture management
-- ✅ Sprite sheets with source rect support
-- ✅ HiDPI scaling (logical pixel coordinate system)
+**wgpu Backend Features**:
+- Rectangles with rounded corners, borders, linear gradients
+- Soft shadows with blur and offset
+- Text rendering via platform-specific APIs (Core Text/DirectWrite/FreeType)
+- Multi-line text with word wrapping and ellipsis
+- Image rendering (PNG, JPEG) with texture management
+- Sprite sheets with source rect support
+- HiDPI scaling (logical pixel coordinate system)
+- Clipping regions (scissor rects)
 
-**Render Commands** (in `render.rs`):
-```rust
-enum RenderCommand {
-    DrawRect { x, y, width, height, color, corner_radii, border, gradient },
-    DrawText { x, y, text, font, color, layout },
-    DrawImage { x, y, width, height, texture_id, source_rect },
-    DrawShadow { x, y, width, height, blur, color, offset_x, offset_y, corner_radii },
-    PushClip { x, y, width, height },
-    PopClip,
-    SetOpacity(f32),
-    Clear { r, g, b, a },
-}
-```
+### Audio/Video (`engine/src/audio/`, `engine/src/video/`)
 
-Legacy platform-specific backends are scaffolded but not actively used:
-- `platform/metal.rs` - Direct Metal (superseded by wgpu)
-- `platform/vulkan_linux.rs`, `platform/vulkan_android.rs`
-- `platform/d3d.rs` - Direct3D 12
-
-See `PLATFORM_BACKENDS.md` for detailed platform documentation.
+Platform-specific audio/video implementations:
+- **macOS**: AVFoundation for playback, Core Audio for capture
+- **iOS**: AVAudioSession, camera via AVCaptureSession
+- **Linux**: GStreamer for video, CPAL/Rodio for audio, V4L2 for camera
+- **Windows**: WASAPI for audio, Media Foundation for video
+- **Android**: MediaPlayer, AudioTrack, camera via JNI
 
 ## Development Practices
 
@@ -589,40 +573,13 @@ func renderFrame(state *AppState) ffi.FrameResponse {
 3. Document event flow in FFI layer
 4. Add test case
 
-## Accessibility System (Planned)
-
-Font scaling will respect OS preferences via scalar-based system. All text utilities multiply against base font size. Updates trigger automatic layout recalculation. Infrastructure should support accessibility metadata on widgets now, even if platform-specific APIs come later.
-
-## Asset Management (Planned)
-
-- Embedded assets (compile-time via `go:embed`): icons, fonts, config files
-- External assets (runtime-loaded): videos, large images, user content
-- Developer chooses approach based on binary size vs convenience tradeoff
-
-## Internationalization (Planned)
-
-TOML-based translation files with key/value pairs and variable substitution. RTL support via `direction = "rtl"` in locale metadata, which mirrors layouts and reverses text automatically.
-
 ## Architectural Decisions
 
 ### FFI vs Shared Memory
 **Decision**: Use FFI for queries (text measurement, font metrics), shared memory for bulk data (frame commands).
 
-**Rationale**:
-- FFI calls are appropriate for occasional queries that need precise answers (e.g., measuring text width)
-- Text measurement via FFI with caching is efficient: measure once per text/font change, cache result
-- Even animated text at 60fps = 60 FFI calls/sec, which is negligible
-- Shared memory will be used for frame command buffers where bulk data transfer matters
-- Keeping layout in Go preserves immediate mode flexibility for game rendering
-
-**Implementation**:
+- FFI calls are appropriate for occasional queries (e.g., measuring text width)
+- Text measurement via FFI with caching: measure once per text/font change, cache result
 - `ffi.MeasureTextWidth()` calls Rust's `centered_measure_text_width()` via CGO
 - Results cached on Widget struct (`textWidth`, `textWidthDirty`)
-- Measurement function swappable via `SetMeasureTextWidthFunc()` for testing or future changes
-
-## Open Questions
-
-- Performance profiling and debugging tools?
-- Hot reload implementation strategy?
-- Plugin system for extending the framework?
-- Full flexbox algorithm implementation priority?
+- Measurement function swappable via `SetMeasureTextWidthFunc()` for testing
