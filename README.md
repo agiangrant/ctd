@@ -18,20 +18,39 @@ A cross-platform native GUI framework combining Rust's performance with Go's dev
 
 - [Go 1.21+](https://go.dev/dl/)
 - [Rust 1.70+](https://rustup.rs/)
-- [Task](https://taskfile.dev/) (build automation)
 
-### Installation
+### Create a New Project
 
 ```bash
-# Clone the repository
-git clone https://github.com/agiangrant/ctd.git
-cd ctd
+# Install the CTD CLI
+go install github.com/agiangrant/ctd/cmd/ctd@latest
 
-# Build the Rust engine
-task build
+# Create a new project
+mkdir myapp && cd myapp
+ctd init
 
-# Run an example
-go run ./examples/tailwind
+# Start development with hot reload
+ctd dev
+```
+
+The `ctd init` command creates:
+- `main.go` — Application entry point
+- `ctd.toml` — Project configuration (app info, permissions, platform settings)
+- `theme.toml` — Custom colors and spacing for Tailwind classes
+
+### CLI Commands
+
+```bash
+ctd init              # Initialize a new project
+ctd dev               # Run with hot reload
+ctd build             # Build for current platform
+ctd build --release   # Build optimized release
+
+# Mobile
+ctd create-ios        # Create Xcode project
+ctd create-android    # Create Android Studio project
+ctd run-ios           # Build and run on iOS simulator
+ctd run-android       # Build and run on Android emulator
 ```
 
 ## Hello World
@@ -246,24 +265,36 @@ Run any example:
 task build && go run ./examples/tailwind
 ```
 
-## Development
+## Contributing
+
+### Prerequisites
+
+- [Task](https://taskfile.dev/) (build automation)
+
+### Setup
 
 ```bash
-# Run all CI checks
-task ci
+git clone https://github.com/agiangrant/ctd.git
+cd ctd
+task build
+```
 
-# Watch mode (rebuild on changes)
-task dev
+### Development Commands
 
-# Format code
-task fmt
+```bash
+task build          # Build Rust engine (debug)
+task build:release  # Build optimized
+task dev            # Watch mode (rebuild on changes)
+task test           # Run Rust tests
+task ci             # Run all CI checks (fmt, clippy, test, build)
+task fmt            # Format Rust code
+go test ./tw/       # Run Go tests
+```
 
-# Run tests
-task test
-go test -v ./tw/
+### Running Examples
 
-# Generate Tailwind classes from theme.toml
-task generate
+```bash
+task build && go run ./examples/tailwind
 ```
 
 ## Status
