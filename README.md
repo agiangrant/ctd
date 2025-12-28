@@ -54,9 +54,10 @@ func main() {
 
     root := ctd.VStack("bg-gray-900 p-8 gap-4",
         ctd.Text("Hello, CTD!", "text-white text-2xl"),
-        ctd.Button("Click me").OnClick(func() {
-            println("Button clicked!")
-        }),
+        ctd.Button("Click me", "bg-blue-500 text-white px-4 py-2 rounded").
+            OnClick(func(e *ctd.MouseEvent) {
+                println("Button clicked!")
+            }),
     )
 
     loop.Tree().SetRoot(root)
@@ -101,32 +102,47 @@ ctd.Container("animate-[pulse_500ms_elastic]")  // Custom timing
 
 ## Widgets
 
-### Layout Widgets
+### Layout
 ```go
-ctd.VStack(classes, children...)   // Vertical stack
-ctd.HStack(classes, children...)   // Horizontal stack
-ctd.ZStack(classes, children...)   // Overlapping layers
-ctd.Container(classes)             // Generic container
-ctd.Spacer()                       // Flexible space
+ctd.VStack(classes, children...)      // Vertical stack
+ctd.HStack(classes, children...)      // Horizontal stack
+ctd.ZStack(classes, children...)      // Overlapping layers
+ctd.Container(classes)                // Generic container
+ctd.ScrollView(classes, children...)  // Scrollable container
+ctd.Flex(classes, children...)        // Flex container (respects flex-direction)
 ```
 
-### Input Widgets
-```go
-ctd.Button("Label").OnClick(func() { ... })
-ctd.TextField().Placeholder("Enter text...")
-ctd.TextArea().Class("w-full h-[200px]")
-ctd.Checkbox("Enable feature", "").OnChange(func(v any) { ... })
-ctd.Radio("Option A", "group", "").OnChange(func(v any) { ... })
-ctd.Slider("").SetSliderRange(0, 100).OnChange(func(v any) { ... })
-ctd.Select("Choose...", "").SetSelectOptions(options)
-ctd.Toggle("").OnChange(func(v any) { ... })
-```
-
-### Text Widgets
+### Text & Buttons
 ```go
 ctd.Text("Content", "text-white text-lg")
-ctd.Heading("Title", "text-2xl font-bold")
-ctd.Label("Field label", "text-gray-400 text-sm")
+ctd.Button("Label", "bg-blue-500 px-4 py-2").OnClick(func(e *ctd.MouseEvent) { ... })
+```
+
+### Form Controls
+```go
+ctd.TextField("placeholder", "classes")
+ctd.Checkbox("Label", "").OnChange(func(v any) { ... })
+ctd.Toggle("").OnChange(func(v any) { ... })
+ctd.Radio("Label", "groupName", "").OnChange(func(v any) { ... })
+ctd.Slider("").SetSliderRange(0, 100).OnChange(func(v any) { ... })
+ctd.Select("Choose...", "").SetSelectOptions(options)
+```
+
+### Media
+```go
+ctd.Image(textureID, "classes")           // From pre-loaded texture
+ctd.ImageFromSource("path/or/url", "")    // Auto-loads from file or URL
+ctd.Video("path/or/url", "")
+ctd.Audio("path/or/url", "")
+ctd.Camera("")                            // Video capture
+ctd.Microphone("")                        // Audio capture
+```
+
+### System
+```go
+ctd.Clipboard()                           // System clipboard access
+ctd.FilePicker()                          // Native file dialogs
+ctd.TrayIcon()                            // System tray (desktop only)
 ```
 
 ## Animation
@@ -212,13 +228,18 @@ The `examples/` directory contains working demos:
 | `controls` | Form widgets (checkbox, radio, slider, select) |
 | `textinput` | Text fields and text areas |
 | `flexbox` | Flexbox layout system |
+| `layout` | Layout patterns |
 | `responsive` | Responsive breakpoints |
 | `darkmode` | Light/dark mode switching |
 | `audio` | Audio playback |
 | `video` | Video playback |
 | `images` | Image loading and display |
+| `media_input` | Camera and microphone capture |
+| `clipboard` | System clipboard access |
+| `frameless` | Frameless window styling |
 | `ios_demo` | iOS-specific features |
 | `android_demo` | Android-specific features |
+| `web_demo` | WebAssembly demo |
 
 Run any example:
 ```bash
@@ -247,13 +268,8 @@ task generate
 
 ## Status
 
-CTD is in early development (Phase 1: Foundation). The core rendering and widget systems are functional, with ongoing work on:
-
-- Full flexbox algorithm (wrapping, multi-line)
-- Accessibility (screen reader support)
-- Hot reload
-- Additional platform features
+CTD is in active development. The core rendering engine, widget system, and Tailwind parser are functional across macOS, iOS, Android, Linux, Windows, and Web platforms.
 
 ## License
 
-[License details here]
+MIT
