@@ -336,114 +336,7 @@ func generateGoCode(config Config) string {
 		config.Breakpoints.SM, config.Breakpoints.MD, config.Breakpoints.LG, config.Breakpoints.XL, config.Breakpoints.XXL))
 	b.WriteString("}\n\n")
 
-	// Generate PartialStyle struct
-	b.WriteString(`// PartialStyle represents a partial style that can be merged
-type PartialStyle struct {
-	// Colors
-	TextColor       *uint32
-	BackgroundColor *uint32
-	BorderColor     *uint32
-
-	// Typography
-	FontFamily    *string // "sans", "serif", "mono", or custom name from theme.toml
-	FontSize      *float32
-	FontWeight    *int
-	LineHeight    *float32
-	LetterSpacing *float32
-	TextAlign     *string
-
-	// Spacing
-	PaddingTop    *float32
-	PaddingRight  *float32
-	PaddingBottom *float32
-	PaddingLeft   *float32
-	MarginTop     *float32
-	MarginRight   *float32
-	MarginBottom  *float32
-	MarginLeft    *float32
-
-	// Sizing
-	Width         *float32
-	Height        *float32
-	MinWidth      *float32
-	MinHeight     *float32
-	MaxWidth      *float32
-	MaxHeight     *float32
-	WidthMode     *string  // "fixed", "auto", "full", "percent", "flex"
-	HeightMode    *string  // "fixed", "auto", "full", "percent", "flex"
-	WidthPercent  *float32 // Percentage value when WidthMode is "percent"
-	HeightPercent *float32 // Percentage value when HeightMode is "percent"
-
-	// Layout
-	Display  *string
-	Position *string
-	Top      *float32
-	Right    *float32
-	Bottom   *float32
-	Left     *float32
-	ZIndex   *int
-
-	// Flexbox
-	FlexDirection    *string
-	JustifyContent   *string
-	AlignItems       *string
-	AlignSelf        *string  // "auto", "start", "end", "center", "stretch", "baseline"
-	FlexWrap         *string
-	FlexGrow         *float32
-	FlexShrink       *float32
-	FlexBasis        *float32 // Flex basis in pixels (when mode is "fixed")
-	FlexBasisMode    *string  // "auto", "full", "percent", "fixed"
-	FlexBasisPercent *float32 // Percentage value when FlexBasisMode is "percent"
-	Gap              *float32
-	Order            *int     // Flex item order
-
-	// Grid
-	GridTemplateColumns *string
-	GridTemplateRows    *string
-	GridColumnSpan      *int
-	GridRowSpan         *int
-
-	// Borders
-	BorderWidth  *float32
-	BorderRadius *float32
-	BorderStyle  *string
-
-	// Effects
-	Opacity   *float32
-	BoxShadow *string
-
-	// Transforms
-	Scale      *float32
-	Rotate     *float32
-	TranslateX *float32
-	TranslateY *float32
-
-	// Transitions
-	TransitionProperty *string
-	TransitionDuration *float32
-	TransitionTiming   *string
-
-	// Interactivity
-	Cursor        *string
-	PointerEvents *string
-	UserSelect    *string
-
-	// Overflow
-	OverflowX *string
-	OverflowY *string
-
-	// Object fit and position (for images)
-	ObjectFit      *string // "contain", "cover", "fill", "none", "scale-down"
-	ObjectPosition *string // "center", "top", "bottom", "left", "right", "top-left", etc.
-
-	// Animations
-	Animation           *string  // "pulse", "bounce", "spin", "ping", "none"
-	AnimationDuration   *float32 // Override default duration (in ms)
-	AnimationEasing     *string  // "linear", "ease-in", "ease-out", "ease-in-out"
-	AnimationIterations *int     // Number of times to repeat (0 = infinite)
-}
-
-`)
+	// NOTE: PartialStyle and FontFamilyConfig types are defined in types.go (not generated)
 
 	// Generate ClassMap
 	b.WriteString("// ClassMap contains all Tailwind utility classes\n")
@@ -980,14 +873,7 @@ type PartialStyle struct {
 
 	b.WriteString("}\n\n")
 
-	// Generate FontFamilyConfig type and ThemeFonts function
-	b.WriteString(`// FontFamilyConfig represents a font family configuration
-type FontFamilyConfig struct {
-	Value     string // System font name or file path
-	IsBundled bool   // true if Value is a file path, false if system font
-}
-
-`)
+	// NOTE: FontFamilyConfig type is defined in types.go (not generated)
 
 	// Generate ThemeFonts map
 	b.WriteString("// ThemeFonts returns the font family mappings from theme.toml.\n")

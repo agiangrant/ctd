@@ -378,7 +378,7 @@ var (
 // getThemeFonts returns the cached theme fonts.
 func getThemeFonts() map[string]tw.FontFamilyConfig {
 	themeFontsCacheOnce.Do(func() {
-		themeFontsCache = tw.ThemeFonts()
+		themeFontsCache = tw.GetFonts() // Uses registered or framework default
 	})
 	return themeFontsCache
 }
@@ -598,8 +598,8 @@ func NewLoop(config LoopConfig) *Loop {
 		config.TargetFPS = 60
 	}
 
-	// Set breakpoints from config or use theme defaults
-	breakpoints := tw.ThemeBreakpoints()
+	// Set breakpoints from config or use theme defaults (registered or framework default)
+	breakpoints := tw.GetBreakpoints()
 	if config.Breakpoints != nil {
 		breakpoints = *config.Breakpoints
 	}

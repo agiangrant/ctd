@@ -201,9 +201,9 @@ func ParseClasses(classStr string) ComputedStyles {
 		if parsed.ArbitraryValue != nil {
 			partial = parseArbitraryValue(parsed.ArbitraryValue)
 		} else {
-			// Look up base utility in ClassMap
+			// Look up base utility in ClassMap (uses registered or framework default)
 			var ok bool
-			partial, ok = ClassMap[parsed.BaseClass]
+			partial, ok = GetClassMap()[parsed.BaseClass]
 			if !ok {
 				// Unknown class, silently ignore (like Tailwind CSS)
 				continue
