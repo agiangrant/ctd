@@ -16,27 +16,9 @@ import (
 func BuildAndroid(args []string) error {
 	fs := flag.NewFlagSet("build-android", flag.ExitOnError)
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "engine", "Path to Rust engine directory")
 	androidDir := fs.String("android", "android", "Path to Android project directory")
 	arm64Only := fs.Bool("arm64-only", false, "Build only for arm64-v8a (faster builds)")
 	fs.Parse(args)
-
-	// Load config
-	config, err := LoadConfig()
-	if err != nil {
-		fmt.Printf("Warning: %v, using defaults\n", err)
-		config = DefaultConfig()
-	}
-
-	// Use config engine dir if not overridden
-	if *engineDir == "engine" && config.Build.EngineDir != "" {
-		*engineDir = config.Build.EngineDir
-	}
-
-	// Check engine directory exists
-	if _, err := os.Stat(*engineDir); os.IsNotExist(err) {
-		return fmt.Errorf("engine directory not found: %s", *engineDir)
-	}
 
 	// Determine targets
 	targets := []string{"aarch64-linux-android"}
@@ -45,51 +27,14 @@ func BuildAndroid(args []string) error {
 		targets = append(targets, "x86_64-linux-android")
 	}
 
-	// Find NDK
-	ndkHome, err := findAndroidNDK()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Using NDK: %s\n", ndkHome)
-
-	// Determine host tag
-	hostTag := getHostTag()
-
-	// Build for each target
-	buildType := "debug"
-	if *release {
-		buildType = "release"
-	}
-
+	// Build for each target using the engine management system
+	var libPaths = make(map[string]string)
 	for _, target := range targets {
-		fmt.Printf("Building for %s...\n", target)
-
-		// Ensure target is installed
-		if err := ensureRustTarget(target); err != nil {
-			return fmt.Errorf("failed to add target %s: %w", target, err)
+		libPath, err := EnsureEngineBuilt(target, *release)
+		if err != nil {
+			return fmt.Errorf("failed to build engine for %s: %w", target, err)
 		}
-
-		// Set up toolchain environment
-		toolchainDir := filepath.Join(ndkHome, "toolchains", "llvm", "prebuilt", hostTag)
-		env := getAndroidBuildEnv(target, toolchainDir)
-
-		// Build command
-		buildArgs := []string{"build", "--target", target, "--lib"}
-		if *release {
-			buildArgs = append(buildArgs, "--release")
-		}
-
-		cmd := exec.Command("cargo", buildArgs...)
-		cmd.Dir = *engineDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Env = append(os.Environ(), env...)
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("build failed for %s: %w", target, err)
-		}
-
-		fmt.Printf("✓ Built for %s\n", target)
+		libPaths[target] = libPath
 	}
 
 	// Copy .so files to Android project
@@ -104,7 +49,7 @@ func BuildAndroid(args []string) error {
 
 	for _, target := range targets {
 		abi := targetToABI[target]
-		srcPath := filepath.Join(*engineDir, "target", target, buildType, "libcentered_engine.so")
+		srcPath := libPaths[target]
 		dstDir := filepath.Join(*androidDir, "app", "src", "main", "jniLibs", abi)
 		dstPath := filepath.Join(dstDir, "libcentered_engine.so")
 
@@ -145,7 +90,6 @@ func RunAndroid(args []string) error {
 	fs := flag.NewFlagSet("run-android", flag.ExitOnError)
 	emulatorName := fs.String("emulator", "", "Emulator AVD name (uses running emulator if not specified)")
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "engine", "Path to Rust engine directory")
 	androidDir := fs.String("android", "android", "Path to Android project directory")
 	fs.Parse(args)
 
@@ -158,7 +102,7 @@ func RunAndroid(args []string) error {
 
 	// Build first (arm64 only for speed)
 	fmt.Println("Building for Android...")
-	buildArgs := []string{"--arm64-only", "--engine", *engineDir, "--android", *androidDir}
+	buildArgs := []string{"--arm64-only", "--android", *androidDir}
 	if *release {
 		buildArgs = append(buildArgs, "--release")
 	}

@@ -15,7 +15,6 @@ func BuildIOS(args []string) error {
 	simulator := fs.Bool("simulator", false, "Build for iOS simulator")
 	device := fs.Bool("device", false, "Build for physical iOS device")
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "engine", "Path to Rust engine directory")
 	fs.Parse(args)
 
 	// Default to simulator if neither specified
@@ -26,23 +25,6 @@ func BuildIOS(args []string) error {
 	// Check we're on macOS
 	if runtime.GOOS != "darwin" {
 		return fmt.Errorf("iOS builds require macOS")
-	}
-
-	// Load config
-	config, err := LoadConfig()
-	if err != nil {
-		fmt.Printf("Warning: %v, using defaults\n", err)
-		config = DefaultConfig()
-	}
-
-	// Use config engine dir if not overridden
-	if *engineDir == "engine" && config.Build.EngineDir != "" {
-		*engineDir = config.Build.EngineDir
-	}
-
-	// Check engine directory exists
-	if _, err := os.Stat(*engineDir); os.IsNotExist(err) {
-		return fmt.Errorf("engine directory not found: %s", *engineDir)
 	}
 
 	// Determine targets
@@ -58,50 +40,19 @@ func BuildIOS(args []string) error {
 	}
 
 	// Build for each target
+	var libPaths []string
 	for _, target := range targets {
-		fmt.Printf("Building for %s...\n", target)
-
-		// Ensure target is installed
-		if err := ensureRustTarget(target); err != nil {
-			return fmt.Errorf("failed to add target %s: %w", target, err)
+		libPath, err := EnsureEngineBuilt(target, *release)
+		if err != nil {
+			return fmt.Errorf("failed to build engine for %s: %w", target, err)
 		}
-
-		// Build command
-		buildArgs := []string{"build", "--target", target}
-		if *release {
-			buildArgs = append(buildArgs, "--release")
-		}
-
-		cmd := exec.Command("cargo", buildArgs...)
-		cmd.Dir = *engineDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Env = append(os.Environ(), getIOSBuildEnv(target)...)
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("build failed for %s: %w", target, err)
-		}
-
-		fmt.Printf("✓ Built for %s\n", target)
-	}
-
-	// Determine output paths
-	buildType := "debug"
-	if *release {
-		buildType = "release"
+		libPaths = append(libPaths, libPath)
 	}
 
 	fmt.Println("")
 	fmt.Println("Build outputs:")
-	for _, target := range targets {
-		libPath := filepath.Join(*engineDir, "target", target, buildType, "libcentered_engine.a")
-		if _, err := os.Stat(libPath); err == nil {
-			fmt.Printf("  %s\n", libPath)
-		}
-		dylibPath := filepath.Join(*engineDir, "target", target, buildType, "libcentered_engine.dylib")
-		if _, err := os.Stat(dylibPath); err == nil {
-			fmt.Printf("  %s\n", dylibPath)
-		}
+	for _, libPath := range libPaths {
+		fmt.Printf("  %s\n", libPath)
 	}
 
 	return nil
@@ -112,7 +63,6 @@ func RunIOS(args []string) error {
 	fs := flag.NewFlagSet("run-ios", flag.ExitOnError)
 	simulatorName := fs.String("simulator", "iPhone 15 Pro", "Simulator device name")
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "engine", "Path to Rust engine directory")
 	iosDir := fs.String("ios", "ios", "Path to iOS project directory")
 	fs.Parse(args)
 
@@ -136,7 +86,6 @@ func RunIOS(args []string) error {
 	if *release {
 		buildArgs = append(buildArgs, "--release")
 	}
-	buildArgs = append(buildArgs, "--engine", *engineDir)
 	if err := BuildIOS(buildArgs); err != nil {
 		return err
 	}
@@ -150,22 +99,16 @@ func RunIOS(args []string) error {
 
 	// Create app bundle
 	fmt.Println("Creating app bundle...")
-	buildType := "debug"
-	if *release {
-		buildType = "release"
-	}
 
-	appBundleDir := filepath.Join(*engineDir, "target", "ios-app-bundle", safeName+".app")
+	appBundleDir := filepath.Join(ctdCacheDir, "ios-app-bundle", safeName+".app")
 	if err := os.MkdirAll(appBundleDir, 0755); err != nil {
 		return fmt.Errorf("failed to create app bundle: %w", err)
 	}
 
-	// Copy binary
-	binaryPath := filepath.Join(*engineDir, "target", "aarch64-apple-ios-sim", buildType, "centered_engine")
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		// Try the library instead
-		binaryPath = filepath.Join(*engineDir, "target", "aarch64-apple-ios-sim", buildType, "libcentered_engine.dylib")
-	}
+	// Get path to built library
+	target := "aarch64-apple-ios-sim"
+	libPath := GetEngineLibraryPath(target)
+	_ = libPath // Used when setting up app bundle binary
 
 	// Copy Info.plist
 	infoPlistSrc := filepath.Join(*iosDir, safeName, "Info.plist")

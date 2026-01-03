@@ -29,22 +29,27 @@ go install github.com/agiangrant/ctd/cmd/ctd@latest
 mkdir myapp && cd myapp
 ctd init
 
-# Start development with hot reload
-ctd dev
+# Build and run (engine compiles automatically on first build)
+ctd build
+cd build && ./myapp
 ```
 
 The `ctd init` command creates:
 - `main.go` — Application entry point
 - `ctd.toml` — Project configuration (app info, permissions, platform settings)
 - `theme.toml` — Custom colors and spacing for Tailwind classes
+- `.gitignore` — Ignores build artifacts and cached engine
+
+The first build fetches and compiles the Rust engine (~2 min), subsequent builds are fast.
 
 ### CLI Commands
 
 ```bash
 ctd init              # Initialize a new project
 ctd dev               # Run with hot reload
-ctd build             # Build for current platform
+ctd build             # Build for current platform (engine built automatically)
 ctd build --release   # Build optimized release
+ctd clean             # Remove cached engine and build artifacts
 
 # Mobile
 ctd create-ios        # Create Xcode project

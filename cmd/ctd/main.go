@@ -47,6 +47,8 @@ func main() {
 		err = commands.RunIOS(args)
 	case "run-android":
 		err = commands.RunAndroid(args)
+	case "clean":
+		err = commands.Clean(args)
 	case "version", "-v", "--version":
 		fmt.Printf("ctd version %s\n", version)
 	case "help", "-h", "--help":
@@ -92,6 +94,7 @@ Mobile Builds:
   run-android     Build and run on Android emulator
 
 Other:
+  clean           Remove cached engine source and built libraries (.ctd/)
   version         Print version information
   help            Show this help message
 

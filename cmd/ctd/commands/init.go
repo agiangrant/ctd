@@ -108,6 +108,14 @@ entry_point = "."
 		return fmt.Errorf("failed to create tw directory: %w", err)
 	}
 
+	// Create .gitignore if it doesn't exist
+	if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
+		if err := os.WriteFile(".gitignore", []byte(defaultGitignore), 0644); err != nil {
+			return fmt.Errorf("failed to create .gitignore: %w", err)
+		}
+		fmt.Println("  ✓ Created .gitignore")
+	}
+
 	// Create basic main.go if it doesn't exist
 	if _, err := os.Stat("main.go"); os.IsNotExist(err) {
 		mainGo := fmt.Sprintf(mainGoTemplate, projectName, appIdentifier)
@@ -125,19 +133,24 @@ entry_point = "."
 		fmt.Println("  go get github.com/agiangrant/ctd")
 	}
 
+	// Fetch engine source (optional, will be fetched on first build if skipped)
+	fmt.Println("")
+	if err := FetchEngineSource(false); err != nil {
+		fmt.Printf("Note: Could not fetch engine source: %v\n", err)
+		fmt.Println("The engine will be fetched automatically on first build.")
+	}
+
 	fmt.Println("")
 	fmt.Println("✓ Project initialized!")
 	fmt.Println("")
 	fmt.Println("Next steps:")
-	fmt.Println("  1. Generate Tailwind styles:")
-	fmt.Println("     ctd generate")
+	fmt.Println("  1. Build and run (engine compiles automatically on first build):")
+	fmt.Println("     ctd build           # Build for current platform")
+	fmt.Println("     ctd dev             # Development mode with hot reload")
 	fmt.Println("")
 	fmt.Println("  2. For mobile development:")
 	fmt.Println("     ctd create-ios      # Create iOS project")
 	fmt.Println("     ctd create-android  # Create Android project")
-	fmt.Println("")
-	fmt.Println("  3. Build and run:")
-	fmt.Println("     ctd build-macos     # Build for macOS")
 	fmt.Println("     ctd run-ios         # Run on iOS simulator")
 	fmt.Println("     ctd run-android     # Run on Android emulator")
 
@@ -183,6 +196,37 @@ const defaultThemeToml = `# CTD Theme Configuration
 [utilities]
 # btn-primary = ["bg-blue-500", "text-white", "px-4", "py-2", "rounded-lg"]
 # card = ["bg-white", "rounded-xl", "shadow-lg", "p-6"]
+`
+
+const defaultGitignore = `# CTD cache (engine source + built libraries)
+.ctd/
+
+# Generated Go files
+tw/generated.go
+
+# Build output
+build/
+dist/
+
+# Rust build artifacts (if engine is local)
+engine/target/
+
+# Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
 `
 
 const mainGoTemplate = `package main

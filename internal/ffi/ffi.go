@@ -266,12 +266,37 @@ func getLibraryPath() string {
 		libName = "libcentered_engine.so"
 	}
 
+	// Determine target triple for .ctd cache lookup
+	var targetTriple string
+	switch runtime.GOOS {
+	case "darwin":
+		if runtime.GOARCH == "arm64" {
+			targetTriple = "aarch64-apple-darwin"
+		} else {
+			targetTriple = "x86_64-apple-darwin"
+		}
+	case "linux":
+		if runtime.GOARCH == "arm64" {
+			targetTriple = "aarch64-unknown-linux-gnu"
+		} else {
+			targetTriple = "x86_64-unknown-linux-gnu"
+		}
+	case "windows":
+		if runtime.GOARCH == "arm64" {
+			targetTriple = "aarch64-pc-windows-msvc"
+		} else {
+			targetTriple = "x86_64-pc-windows-msvc"
+		}
+	}
+
 	// Check common locations
 	searchPaths := []string{
 		// Current directory
 		libName,
 		// Relative to executable
 		filepath.Join(".", libName),
+		// .ctd cache (built by ctd build)
+		filepath.Join(".ctd", "lib", targetTriple, libName),
 		// engine/target/release (development)
 		filepath.Join("engine", "target", "release", libName),
 		// engine/target/debug (development)

@@ -12,7 +12,6 @@ import (
 func BuildWindows(args []string) error {
 	fs := flag.NewFlagSet("build-windows", flag.ExitOnError)
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "", "Path to Rust engine directory")
 	outputDir := fs.String("output", "", "Output directory for built artifacts")
 	fs.Parse(args)
 
@@ -24,47 +23,17 @@ func BuildWindows(args []string) error {
 	}
 
 	// Apply config defaults
-	if *engineDir == "" {
-		*engineDir = config.Build.EngineDir
-	}
 	if *outputDir == "" {
 		*outputDir = config.Build.OutputDir
 	}
 
-	// Check engine directory exists
-	if _, err := os.Stat(*engineDir); os.IsNotExist(err) {
-		return fmt.Errorf("engine directory not found: %s", *engineDir)
-	}
-
 	rustTarget := "x86_64-pc-windows-msvc"
-	buildType := "debug"
-	if *release {
-		buildType = "release"
+
+	// Ensure engine is built for target
+	dllPath, err := EnsureEngineBuilt(rustTarget, *release)
+	if err != nil {
+		return fmt.Errorf("failed to build engine for %s: %w", rustTarget, err)
 	}
-
-	// Build Rust engine
-	fmt.Printf("Building Rust engine for %s...\n", rustTarget)
-
-	if err := ensureRustTarget(rustTarget); err != nil {
-		return fmt.Errorf("failed to add target %s: %w", rustTarget, err)
-	}
-
-	buildArgs := []string{"build", "--target", rustTarget}
-	if *release {
-		buildArgs = append(buildArgs, "--release")
-	}
-
-	cmd := exec.Command("cargo", buildArgs...)
-	cmd.Dir = *engineDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cargo build failed: %w", err)
-	}
-
-	dllPath := filepath.Join(*engineDir, "target", rustTarget, buildType, "centered_engine.dll")
-	fmt.Printf("✓ Built %s\n", dllPath)
 
 	// Create output directory
 	if err := os.MkdirAll(*outputDir, 0755); err != nil {

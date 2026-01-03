@@ -13,7 +13,6 @@ import (
 func BuildMacOS(args []string) error {
 	fs := flag.NewFlagSet("build-macos", flag.ExitOnError)
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "engine", "Path to Rust engine directory")
 	outputDir := fs.String("output", "build", "Output directory for built artifacts")
 	universal := fs.Bool("universal", false, "Build universal binary (arm64 + x86_64)")
 	fs.Parse(args)
@@ -30,17 +29,9 @@ func BuildMacOS(args []string) error {
 		config = DefaultConfig()
 	}
 
-	// Use config dirs if not overridden
-	if *engineDir == "engine" && config.Build.EngineDir != "" {
-		*engineDir = config.Build.EngineDir
-	}
+	// Use config output dir if not overridden
 	if *outputDir == "build" && config.Build.OutputDir != "" {
 		*outputDir = config.Build.OutputDir
-	}
-
-	// Check engine directory exists
-	if _, err := os.Stat(*engineDir); os.IsNotExist(err) {
-		return fmt.Errorf("engine directory not found: %s", *engineDir)
 	}
 
 	// Determine targets
@@ -56,33 +47,14 @@ func BuildMacOS(args []string) error {
 		}
 	}
 
-	buildType := "debug"
-	if *release {
-		buildType = "release"
-	}
-
-	// Build Rust engine for each target
+	// Ensure engine is built for each target
 	var builtLibs []string
 	for _, target := range targets {
-		fmt.Printf("Building Rust engine for %s...\n", target)
-
-		buildArgs := []string{"build", "--target", target}
-		if *release {
-			buildArgs = append(buildArgs, "--release")
+		libPath, err := EnsureEngineBuilt(target, *release)
+		if err != nil {
+			return fmt.Errorf("failed to build engine for %s: %w", target, err)
 		}
-
-		cmd := exec.Command("cargo", buildArgs...)
-		cmd.Dir = *engineDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("cargo build failed for %s: %w", target, err)
-		}
-
-		libPath := filepath.Join(*engineDir, "target", target, buildType, "libcentered_engine.dylib")
 		builtLibs = append(builtLibs, libPath)
-		fmt.Printf("✓ Built %s\n", libPath)
 	}
 
 	// Create universal binary if requested

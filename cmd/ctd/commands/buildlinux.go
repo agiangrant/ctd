@@ -13,7 +13,6 @@ import (
 func BuildLinux(args []string) error {
 	fs := flag.NewFlagSet("build-linux", flag.ExitOnError)
 	release := fs.Bool("release", false, "Build in release mode")
-	engineDir := fs.String("engine", "", "Path to Rust engine directory")
 	outputDir := fs.String("output", "", "Output directory for built artifacts")
 	targetArch := fs.String("arch", "", "Target architecture (amd64, arm64)")
 	fs.Parse(args)
@@ -26,9 +25,6 @@ func BuildLinux(args []string) error {
 	}
 
 	// Apply config defaults
-	if *engineDir == "" {
-		*engineDir = config.Build.EngineDir
-	}
 	if *outputDir == "" {
 		*outputDir = config.Build.OutputDir
 	}
@@ -38,11 +34,6 @@ func BuildLinux(args []string) error {
 		} else {
 			*targetArch = "amd64"
 		}
-	}
-
-	// Check engine directory exists
-	if _, err := os.Stat(*engineDir); os.IsNotExist(err) {
-		return fmt.Errorf("engine directory not found: %s", *engineDir)
 	}
 
 	// Determine Rust target
@@ -56,34 +47,11 @@ func BuildLinux(args []string) error {
 		return fmt.Errorf("unsupported architecture: %s", *targetArch)
 	}
 
-	buildType := "debug"
-	if *release {
-		buildType = "release"
+	// Ensure engine is built for target
+	libPath, err := EnsureEngineBuilt(rustTarget, *release)
+	if err != nil {
+		return fmt.Errorf("failed to build engine for %s: %w", rustTarget, err)
 	}
-
-	// Build Rust engine
-	fmt.Printf("Building Rust engine for %s...\n", rustTarget)
-
-	if err := ensureRustTarget(rustTarget); err != nil {
-		return fmt.Errorf("failed to add target %s: %w", rustTarget, err)
-	}
-
-	buildArgs := []string{"build", "--target", rustTarget}
-	if *release {
-		buildArgs = append(buildArgs, "--release")
-	}
-
-	cmd := exec.Command("cargo", buildArgs...)
-	cmd.Dir = *engineDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cargo build failed: %w", err)
-	}
-
-	libPath := filepath.Join(*engineDir, "target", rustTarget, buildType, "libcentered_engine.so")
-	fmt.Printf("✓ Built %s\n", libPath)
 
 	// Create output directory
 	if err := os.MkdirAll(*outputDir, 0755); err != nil {
