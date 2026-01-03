@@ -172,7 +172,15 @@ func buildConfigGen(user ThemeConfigGen) ConfigGen {
 
 	for key, value := range user.Theme.Colors {
 		if str, ok := value.(string); ok {
+			// Simple color: primary = "#FF6B35"
 			config.Colors[key] = str
+		} else if nested, ok := value.(map[string]interface{}); ok {
+			// Nested color palette: [theme.colors.gray] 900 = "#1a1a2e"
+			for shade, shadeValue := range nested {
+				if shadeStr, ok := shadeValue.(string); ok {
+					config.Colors[key+"-"+shade] = shadeStr
+				}
+			}
 		}
 	}
 
